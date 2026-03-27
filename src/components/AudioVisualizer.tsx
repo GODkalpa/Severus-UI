@@ -97,15 +97,19 @@ export default function AudioVisualizer({ voiceStatus = "idle" }: AudioVisualize
         {/* SVG Core Waveform */}
         <svg className="absolute w-[240px] h-[240px] overflow-visible" viewBox="0 0 100 100">
           <motion.circle 
-            cx="50%" cy="50%" r="22" fill="none" 
+            cx={50}
+            cy={50}
+            r={22}
+            fill="none"
             stroke={primaryColor} strokeWidth="0.2" strokeOpacity="0.1" 
-            animate={{ r: isRecording ? [22, 25, 22] : 22 }}
+            style={{ transformOrigin: "50% 50%" }}
+            animate={{ scale: isRecording ? [1, 1.12, 1] : 1 }}
           />
           {[0, 1].map((layer) => (
             <motion.circle
               key={layer}
-              cx="50%"
-              cy="50%"
+              cx={50}
+              cy={50}
               r={28 + layer * 6}
               fill="none"
               stroke={primaryColor}

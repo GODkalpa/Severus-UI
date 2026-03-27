@@ -229,6 +229,17 @@ export function useVoiceAssistant() {
     updateStatus("connecting");
     clearConnectTimeout();
 
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      window.location.hostname === "::1";
+
+    if (!window.isSecureContext && !isLocalhost) {
+      setError("Voice requires HTTPS or localhost");
+      updateStatus("error");
+      return;
+    }
+
     const backendUrl = getVoiceBackendUrl();
     if (!backendUrl) {
       setError("Voice backend URL is not configured");
