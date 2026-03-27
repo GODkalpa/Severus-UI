@@ -15,13 +15,15 @@ export function useVoiceAssistant() {
   const [error, setError] = useState<string | null>(null);
   
   const socketRef = useRef<WebSocket | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const connect = () => {
     setStatus("connecting");
-    const socket = new WebSocket("ws://localhost:8000/ws/severus");
+    const backendUrl = process.env.NEXT_PUBLIC_VOICE_BACKEND_URL || "ws://localhost:8001/ws/severus";
+    const socket = new WebSocket(backendUrl);
+    socket.binaryType = "arraybuffer";
     socketRef.current = socket;
 
     socket.onopen = () => {
@@ -31,9 +33,11 @@ export function useVoiceAssistant() {
     };
 
     socket.onmessage = async (event) => {
-      if (event.data instanceof Blob) {
-        console.log("Received audio blob from backend");
-        playAudio(event.data);
+      // Backend handles TTS and returns binary audio
+      if (event.data instanceof ArrayBuffer) {
+        console.log("Received audio buffer from backend");
+        const blob = new Blob([event.data], { type: "audio/mpeg" });
+        playAudio(blob);
       }
     };
 
@@ -46,27 +50,55 @@ export function useVoiceAssistant() {
     socket.onclose = () => {
       console.log("WebSocket disconnected");
       if (status !== "error") setStatus("idle");
+      stopRecording();
     };
   };
 
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
+      streamRef.current = stream;
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0 && socketRef.current?.readyState === WebSocket.OPEN) {
-          socketRef.current.send(event.data);
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioContext = new AudioContextClass({ sampleRate: 16000 });
+      audioContextRef.current = audioContext;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      processor.onaudioprocess = (e) => {
+        if (socketRef.current?.readyState !== WebSocket.OPEN) return;
+
+        const inputData = e.inputBuffer.getChannelData(0);
+        const pcmData = new Int16Array(inputData.length);
+        
+        for (let i = 0; i < inputData.length; i++) {
+          const s = Math.max(-1, Math.min(1, inputData[i]));
+          pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
+        
+        socketRef.current.send(pcmData.buffer);
       };
 
-      mediaRecorder.start(250); // 250ms chunks
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      
       setStatus("recording");
     } catch (err) {
       console.error("Microphone access denied:", err);
       setError("Microphone access denied");
       setStatus("error");
+    }
+  };
+
+  const stopRecording = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
     }
   };
 
@@ -91,7 +123,7 @@ export function useVoiceAssistant() {
     connect();
     return () => {
       socketRef.current?.close();
-      mediaRecorderRef.current?.stop();
+      stopRecording();
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = "";
