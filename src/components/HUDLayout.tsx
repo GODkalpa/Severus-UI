@@ -12,7 +12,7 @@ import { useVoiceAssistant } from "@/hooks/useVoiceAssistant";
 import { useRealtimeDashboard } from "@/hooks/useRealtimeDashboard";
 
 export default function HUDLayout() {
-  const { status } = useVoiceAssistant();
+  const { status, error } = useVoiceAssistant();
   const { biometrics, actionQueue, financialLedger } = useRealtimeDashboard();
 
   const container = {
@@ -89,7 +89,11 @@ export default function HUDLayout() {
           </div>
           
           <div className="text-[9px] text-primary/60 tracking-[1em] font-mono uppercase bg-black/40 px-4 py-1 border-x border-primary/20">
-            {status === "recording" ? "MIC_ACTIVE // UPLINK_HD" : "SECURE_ENCLAVE_ACTIVE"}
+            {status === "error"
+              ? error ?? "VOICE_LINK_ERROR"
+              : status === "recording"
+                ? "MIC_ACTIVE // UPLINK_HD"
+                : "SECURE_ENCLAVE_ACTIVE"}
           </div>
         </div>
       </motion.div>

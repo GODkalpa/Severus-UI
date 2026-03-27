@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getBackendBaseUrl } from "@/lib/backend";
 
 type RowId = number | string | null;
 type DbRow = Record<string, unknown> & { id?: RowId };
@@ -78,35 +79,6 @@ const mapFinancialEntry = (row: DbRow): DashboardFinancialEntry => ({
   description: asString(row.description),
   loggedAt: asNullableString(row.logged_at),
 });
-
-const normalizeBaseUrl = (value: string) => value.replace(/\/+$/, "");
-
-const getBackendBaseUrl = () => {
-  const configuredBaseUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-  if (configuredBaseUrl) {
-    return normalizeBaseUrl(configuredBaseUrl);
-  }
-
-  const configuredVoiceUrl = process.env.NEXT_PUBLIC_VOICE_BACKEND_URL;
-  if (configuredVoiceUrl) {
-    try {
-      const parsed = new URL(configuredVoiceUrl);
-      const protocol =
-        parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
-
-      return `${protocol}//${parsed.host}`;
-    } catch (error) {
-      console.warn("Unable to derive backend URL from NEXT_PUBLIC_VOICE_BACKEND_URL.", error);
-    }
-  }
-
-  if (typeof window !== "undefined") {
-    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-    return `${protocol}//${window.location.hostname || "localhost"}:8001`;
-  }
-
-  return "";
-};
 
 export function useRealtimeDashboard() {
   const [biometrics, setBiometrics] = useState<DashboardBiometric[]>([]);

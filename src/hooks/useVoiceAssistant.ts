@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { getVoiceBackendUrl } from "@/lib/backend";
 
 export type VoiceAssistantStatus =
   | "idle"
@@ -23,6 +24,7 @@ export function useVoiceAssistant() {
   const streamRef = useRef<MediaStream | null>(null);
   const statusRef = useRef<VoiceAssistantStatus>(status);
   const connectionIdRef = useRef(0);
+  const connectTimeoutRef = useRef<number | null>(null);
 
   const updateStatus = (nextStatus: VoiceAssistantStatus) => {
     statusRef.current = nextStatus;
@@ -32,6 +34,15 @@ export function useVoiceAssistant() {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  const clearConnectTimeout = () => {
+    if (connectTimeoutRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(connectTimeoutRef.current);
+    connectTimeoutRef.current = null;
+  };
 
   const clearAudioPlayback = () => {
     const audio = audioRef.current;
@@ -208,14 +219,28 @@ export function useVoiceAssistant() {
 
     setError(null);
     updateStatus("connecting");
+    clearConnectTimeout();
 
-    const backendUrl =
-      process.env.NEXT_PUBLIC_VOICE_BACKEND_URL ||
-      `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname || "localhost"}:8000/ws/severus`;
+    const backendUrl = getVoiceBackendUrl();
+    if (!backendUrl) {
+      setError("Voice backend URL is not configured");
+      updateStatus("error");
+      return;
+    }
 
     const socket = new WebSocket(backendUrl);
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
+    connectTimeoutRef.current = window.setTimeout(() => {
+      if (nextConnectionId !== connectionIdRef.current || socket.readyState !== WebSocket.CONNECTING) {
+        return;
+      }
+
+      console.error("Voice backend connection timed out:", backendUrl);
+      setError("Voice backend connection timed out");
+      updateStatus("error");
+      socket.close();
+    }, 8000);
 
     socket.onopen = () => {
       if (nextConnectionId !== connectionIdRef.current) {
@@ -223,6 +248,7 @@ export function useVoiceAssistant() {
         return;
       }
 
+      clearConnectTimeout();
       console.log("Connected to Severus Backend");
       updateStatus("connected");
       void startRecording(nextConnectionId);
@@ -244,6 +270,7 @@ export function useVoiceAssistant() {
         return;
       }
 
+      clearConnectTimeout();
       console.error("WebSocket error:", err);
       setError("WebSocket connection failed");
       updateStatus("error");
@@ -254,6 +281,7 @@ export function useVoiceAssistant() {
         return;
       }
 
+      clearConnectTimeout();
       console.log("WebSocket disconnected");
       socketRef.current = null;
       clearAudioPlayback();
@@ -270,6 +298,7 @@ export function useVoiceAssistant() {
 
     return () => {
       connectionIdRef.current += 1;
+      clearConnectTimeout();
       socketRef.current?.close();
       socketRef.current = null;
       clearAudioPlayback();
