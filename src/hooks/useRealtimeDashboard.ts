@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import type { RealtimeChannel, RealtimePostgresChangesPayload } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
 
 type RowId = number | string | null;
 type DbRow = Record<string, unknown> & { id?: RowId };
+type DashboardResponse = {
+  biometrics?: DbRow[];
+  action_items?: DbRow[];
+  financial_ledger?: DbRow[];
+};
 
 export interface DashboardBiometric {
   id: RowId;
@@ -76,30 +79,34 @@ const mapFinancialEntry = (row: DbRow): DashboardFinancialEntry => ({
   loggedAt: asNullableString(row.logged_at),
 });
 
-const upsertById = <T extends { id: RowId }>(items: T[], nextItem: T) => {
-  if (nextItem.id == null) {
-    return [nextItem, ...items];
+const normalizeBaseUrl = (value: string) => value.replace(/\/+$/, "");
+
+const getBackendBaseUrl = () => {
+  const configuredBaseUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (configuredBaseUrl) {
+    return normalizeBaseUrl(configuredBaseUrl);
   }
 
-  const index = items.findIndex((item) => item.id === nextItem.id);
-  if (index === -1) {
-    return [nextItem, ...items];
+  const configuredVoiceUrl = process.env.NEXT_PUBLIC_VOICE_BACKEND_URL;
+  if (configuredVoiceUrl) {
+    try {
+      const parsed = new URL(configuredVoiceUrl);
+      const protocol =
+        parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
+
+      return `${protocol}//${parsed.host}`;
+    } catch (error) {
+      console.warn("Unable to derive backend URL from NEXT_PUBLIC_VOICE_BACKEND_URL.", error);
+    }
   }
 
-  const updated = [...items];
-  updated[index] = nextItem;
-  return updated;
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+    return `${protocol}//${window.location.hostname || "localhost"}:8001`;
+  }
+
+  return "";
 };
-
-const removeById = <T extends { id: RowId }>(items: T[], id: RowId) => {
-  if (id == null) {
-    return items;
-  }
-
-  return items.filter((item) => item.id !== id);
-};
-
-const getRetryDelay = (attempt: number) => Math.min(1000 * 2 ** attempt, 10000);
 
 export function useRealtimeDashboard() {
   const [biometrics, setBiometrics] = useState<DashboardBiometric[]>([]);
@@ -107,153 +114,67 @@ export function useRealtimeDashboard() {
   const [financialLedger, setFinancialLedger] = useState<DashboardFinancialEntry[]>([]);
 
   useEffect(() => {
-    const client = supabase;
-
-    if (!client) {
-      console.warn("Supabase dashboard disabled: missing public environment variables.");
+    const backendBaseUrl = getBackendBaseUrl();
+    if (!backendBaseUrl) {
+      console.warn("Dashboard disabled: missing backend URL configuration.");
       return;
     }
 
     let isActive = true;
-    let reconnectAttempts = 0;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let channel: RealtimeChannel | null = null;
-
-    const clearReconnectTimer = () => {
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-    };
+    let abortController: AbortController | null = null;
+    const pollInterval = 30000;
+    const endpoint = `${backendBaseUrl}/api/dashboard`;
 
     const fetchData = async () => {
-      const today = new Date().toISOString().split("T")[0];
+      abortController?.abort();
+      abortController = new AbortController();
 
       try {
-        const [
-          { data: bioData, error: bioError },
-          { data: actionData, error: actionError },
-          { data: financeData, error: financeError },
-        ] = await Promise.all([
-          client
-            .from("biometrics")
-            .select("*")
-            .gte("logged_at", today)
-            .order("logged_at", { ascending: false }),
-          client
-            .from("action_items")
-            .select("*")
-            .order("created_at", { ascending: false }),
-          client
-            .from("financial_ledger")
-            .select("*")
-            .gte("logged_at", today)
-            .order("logged_at", { ascending: false }),
-        ]);
+        const response = await fetch(endpoint, { signal: abortController.signal });
+
+        if (!response.ok) {
+          throw new Error(`Dashboard request failed with status ${response.status}`);
+        }
+
+        const payload = (await response.json()) as DashboardResponse;
 
         if (!isActive) {
           return;
         }
 
-        const firstError = bioError ?? actionError ?? financeError;
-        if (firstError) {
-          console.warn("Supabase dashboard fetch failed.", firstError);
+        setBiometrics((payload.biometrics ?? []).map((row) => mapBiometric(row)));
+        setActionQueue((payload.action_items ?? []).map((row) => mapActionItem(row)));
+        setFinancialLedger((payload.financial_ledger ?? []).map((row) => mapFinancialEntry(row)));
+      } catch (error) {
+        if (!isActive) {
           return;
         }
 
-        setBiometrics((bioData ?? []).map((row) => mapBiometric(row as DbRow)));
-        setActionQueue((actionData ?? []).map((row) => mapActionItem(row as DbRow)));
-        setFinancialLedger((financeData ?? []).map((row) => mapFinancialEntry(row as DbRow)));
-      } catch (error) {
-        if (isActive) {
-          console.warn("Supabase dashboard fetch failed.", error);
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
         }
+
+        if (isActive) {
+          console.warn("Dashboard fetch failed.", error);
+        }
+      } finally {
+        abortController = null;
       }
     };
 
-    const scheduleReconnect = (reason: string, details?: unknown) => {
-      if (!isActive || reconnectTimer) {
-        return;
-      }
-
-      const delay = getRetryDelay(reconnectAttempts);
-      reconnectAttempts += 1;
-      console.warn(`Supabase realtime reconnect scheduled: ${reason}`, details);
-
-      if (channel) {
-        void client.removeChannel(channel);
-        channel = null;
-      }
-
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        void fetchData();
-        subscribe();
-      }, delay);
-    };
-
-    const handleBiometricsChange = (payload: RealtimePostgresChangesPayload<DbRow>) => {
-      if (payload.eventType === "DELETE") {
-        setBiometrics((prev) => removeById(prev, asId(payload.old.id)));
-        return;
-      }
-
-      const nextItem = mapBiometric(payload.new);
-      setBiometrics((prev) => upsertById(prev, nextItem));
-    };
-
-    const handleActionItemsChange = (payload: RealtimePostgresChangesPayload<DbRow>) => {
-      if (payload.eventType === "DELETE") {
-        setActionQueue((prev) => removeById(prev, asId(payload.old.id)));
-        return;
-      }
-
-      const nextItem = mapActionItem(payload.new);
-      setActionQueue((prev) => upsertById(prev, nextItem));
-    };
-
-    const handleFinancialChange = (payload: RealtimePostgresChangesPayload<DbRow>) => {
-      if (payload.eventType === "DELETE") {
-        setFinancialLedger((prev) => removeById(prev, asId(payload.old.id)));
-        return;
-      }
-
-      const nextItem = mapFinancialEntry(payload.new);
-      setFinancialLedger((prev) => upsertById(prev, nextItem));
-    };
-
-    const subscribe = () => {
+    void fetchData();
+    const intervalId = window.setInterval(() => {
       if (!isActive) {
         return;
       }
 
-      channel = client
-        .channel("severus-telemetry")
-        .on("postgres_changes", { event: "*", schema: "public", table: "biometrics" }, handleBiometricsChange)
-        .on("postgres_changes", { event: "*", schema: "public", table: "action_items" }, handleActionItemsChange)
-        .on("postgres_changes", { event: "*", schema: "public", table: "financial_ledger" }, handleFinancialChange)
-        .subscribe((status, err) => {
-          if (status === "SUBSCRIBED") {
-            reconnectAttempts = 0;
-            return;
-          }
-
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-            scheduleReconnect(`subscription ${status.toLowerCase()}`, err);
-          }
-        });
-    };
-
-    void fetchData();
-    subscribe();
+      void fetchData();
+    }, pollInterval);
 
     return () => {
       isActive = false;
-      clearReconnectTimer();
-
-      if (channel) {
-        void client.removeChannel(channel);
-      }
+      window.clearInterval(intervalId);
+      abortController?.abort();
     };
   }, []);
 
