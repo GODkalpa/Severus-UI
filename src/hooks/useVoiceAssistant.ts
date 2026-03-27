@@ -153,6 +153,14 @@ export function useVoiceAssistant() {
 
   const startRecording = async (connectionId: number) => {
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        const reason = window.isSecureContext
+          ? "Microphone API is unavailable in this browser"
+          : "Microphone requires HTTPS or localhost";
+
+        throw new Error(reason);
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (connectionId !== connectionIdRef.current) {
         stream.getTracks().forEach((track) => track.stop());
@@ -203,7 +211,7 @@ export function useVoiceAssistant() {
       updateStatus("recording");
     } catch (err) {
       console.error("Microphone access failed:", err);
-      setError("Microphone access failed");
+      setError(err instanceof Error ? err.message : "Microphone access failed");
       updateStatus("error");
       socketRef.current?.close();
     }
