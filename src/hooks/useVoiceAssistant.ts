@@ -18,6 +18,12 @@ export function useVoiceAssistant() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const statusRef = useRef<VoiceAssistantStatus>(status);
+
+  // Sync ref with state to reach it from onaudioprocess without stale closure
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const connect = () => {
     setStatus("connecting");
@@ -36,6 +42,10 @@ export function useVoiceAssistant() {
       // Backend handles TTS and returns binary audio
       if (event.data instanceof ArrayBuffer) {
         console.log("Received audio buffer from backend");
+        
+        // Transition to playing state before starting playback
+        setStatus("playing");
+        
         const blob = new Blob([event.data], { type: "audio/mpeg" });
         playAudio(blob);
       }
@@ -67,7 +77,14 @@ export function useVoiceAssistant() {
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
       processor.onaudioprocess = (e) => {
+        // ONLY send if socket is open AND we are in recording state
+        // This prevents feedback loops where the AI hears itself
         if (socketRef.current?.readyState !== WebSocket.OPEN) return;
+        
+        // CRITICAL: Use a ref or a direct check against current logic to avoid stale closures
+        // but for now, we'll check the status. Use a simpler approach:
+        // If we are playing, don't send anything.
+        if (statusRef.current === "playing") return;
 
         const inputData = e.inputBuffer.getChannelData(0);
         const pcmData = new Int16Array(inputData.length);

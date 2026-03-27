@@ -14,7 +14,7 @@ export function useRealtimeDashboard() {
       const { data: bioData } = await supabase
         .from('biometrics')
         .select('*')
-        .gte('created_at', today);
+        .gte('logged_at', today);
       if (bioData) setBiometrics(bioData);
 
       const { data: actionData } = await supabase
@@ -26,7 +26,7 @@ export function useRealtimeDashboard() {
       const { data: financeData } = await supabase
         .from('financial_ledger')
         .select('*')
-        .gte('created_at', today);
+        .gte('logged_at', today);
       if (financeData) setFinancialLedger(financeData);
     };
 
