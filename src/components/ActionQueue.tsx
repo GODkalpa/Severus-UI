@@ -3,9 +3,10 @@
 import React from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CheckCircle2, Circle, Clock } from "lucide-react";
+import type { DashboardActionItem } from "@/hooks/useRealtimeDashboard";
 
 interface ActionQueueProps {
-  data: any[];
+  data: DashboardActionItem[];
 }
 
 export default function ActionQueue({ data }: ActionQueueProps) {

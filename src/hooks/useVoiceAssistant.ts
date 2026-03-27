@@ -2,149 +2,278 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export type VoiceAssistantStatus = 
-  | "idle" 
-  | "connecting" 
-  | "connected" 
-  | "recording" 
-  | "playing" 
+export type VoiceAssistantStatus =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "recording"
+  | "playing"
   | "error";
 
 export function useVoiceAssistant() {
   const [status, setStatus] = useState<VoiceAssistantStatus>("idle");
   const [error, setError] = useState<string | null>(null);
-  
+
   const socketRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const statusRef = useRef<VoiceAssistantStatus>(status);
+  const connectionIdRef = useRef(0);
 
-  // Sync ref with state to reach it from onaudioprocess without stale closure
+  const updateStatus = (nextStatus: VoiceAssistantStatus) => {
+    statusRef.current = nextStatus;
+    setStatus(nextStatus);
+  };
+
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
 
-  const connect = () => {
-    setStatus("connecting");
-    const backendUrl = process.env.NEXT_PUBLIC_VOICE_BACKEND_URL || "ws://localhost:8001/ws/severus";
-    const socket = new WebSocket(backendUrl);
-    socket.binaryType = "arraybuffer";
-    socketRef.current = socket;
+  const clearAudioPlayback = () => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.onplay = null;
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    }
 
-    socket.onopen = () => {
-      console.log("Connected to Severus Backend");
-      setStatus("connected");
-      startRecording();
-    };
-
-    socket.onmessage = async (event) => {
-      // Backend handles TTS and returns binary audio
-      if (event.data instanceof ArrayBuffer) {
-        console.log("Received audio buffer from backend");
-        
-        // Transition to playing state before starting playback
-        setStatus("playing");
-        
-        const blob = new Blob([event.data], { type: "audio/mpeg" });
-        playAudio(blob);
-      }
-    };
-
-    socket.onerror = (err) => {
-      console.error("WebSocket Error:", err);
-      setError("WebSocket connection failed");
-      setStatus("error");
-    };
-
-    socket.onclose = () => {
-      console.log("WebSocket disconnected");
-      if (status !== "error") setStatus("idle");
-      stopRecording();
-    };
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
   };
 
-  const startRecording = async () => {
+  const suspendRecording = async () => {
+    const audioContext = audioContextRef.current;
+    if (!audioContext || audioContext.state !== "running") {
+      return;
+    }
+
+    try {
+      await audioContext.suspend();
+    } catch (err) {
+      console.warn("Unable to suspend microphone capture.", err);
+    }
+  };
+
+  const resumeRecording = async () => {
+    const audioContext = audioContextRef.current;
+    if (!audioContext || audioContext.state !== "suspended") {
+      return;
+    }
+
+    try {
+      await audioContext.resume();
+    } catch (err) {
+      console.warn("Unable to resume microphone capture.", err);
+    }
+  };
+
+  const stopRecording = () => {
+    processorRef.current?.disconnect();
+    processorRef.current = null;
+
+    sourceRef.current?.disconnect();
+    sourceRef.current = null;
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    const audioContext = audioContextRef.current;
+    audioContextRef.current = null;
+    if (audioContext) {
+      void audioContext.close().catch((err) => {
+        console.warn("Unable to close microphone context.", err);
+      });
+    }
+  };
+
+  const playAudio = async (blob: Blob) => {
+    await suspendRecording();
+    clearAudioPlayback();
+    updateStatus("playing");
+
+    const url = URL.createObjectURL(blob);
+    audioUrlRef.current = url;
+
+    const audio = audioRef.current ?? new Audio();
+    audioRef.current = audio;
+    audio.src = url;
+
+    audio.onplay = () => updateStatus("playing");
+    audio.onended = () => {
+      if (audioUrlRef.current === url) {
+        URL.revokeObjectURL(url);
+        audioUrlRef.current = null;
+      }
+
+      updateStatus("recording");
+      void resumeRecording();
+    };
+
+    audio.onerror = () => {
+      if (audioUrlRef.current === url) {
+        URL.revokeObjectURL(url);
+        audioUrlRef.current = null;
+      }
+
+      updateStatus("recording");
+      void resumeRecording();
+    };
+
+    try {
+      await audio.play();
+    } catch (err) {
+      console.error("Playback error:", err);
+      clearAudioPlayback();
+      updateStatus("recording");
+      await resumeRecording();
+    }
+  };
+
+  const startRecording = async (connectionId: number) => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (connectionId !== connectionIdRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       streamRef.current = stream;
 
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioContextClass =
+        window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+      if (!AudioContextClass) {
+        throw new Error("AudioContext is not supported in this browser.");
+      }
+
       const audioContext = new AudioContextClass({ sampleRate: 16000 });
       audioContextRef.current = audioContext;
 
       const source = audioContext.createMediaStreamSource(stream);
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
+      sourceRef.current = source;
+      processorRef.current = processor;
+
       processor.onaudioprocess = (e) => {
-        // ONLY send if socket is open AND we are in recording state
-        // This prevents feedback loops where the AI hears itself
-        if (socketRef.current?.readyState !== WebSocket.OPEN) return;
-        
-        // CRITICAL: Use a ref or a direct check against current logic to avoid stale closures
-        // but for now, we'll check the status. Use a simpler approach:
-        // If we are playing, don't send anything.
-        if (statusRef.current === "playing") return;
+        if (socketRef.current?.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        if (statusRef.current !== "recording") {
+          return;
+        }
 
         const inputData = e.inputBuffer.getChannelData(0);
         const pcmData = new Int16Array(inputData.length);
-        
+
         for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          const sample = Math.max(-1, Math.min(1, inputData[i]));
+          pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
         }
-        
+
         socketRef.current.send(pcmData.buffer);
       };
 
       source.connect(processor);
       processor.connect(audioContext.destination);
-      
-      setStatus("recording");
+
+      updateStatus("recording");
     } catch (err) {
-      console.error("Microphone access denied:", err);
-      setError("Microphone access denied");
-      setStatus("error");
+      console.error("Microphone access failed:", err);
+      setError("Microphone access failed");
+      updateStatus("error");
+      socketRef.current?.close();
     }
   };
 
-  const stopRecording = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-  };
+  const connect = () => {
+    const nextConnectionId = connectionIdRef.current + 1;
+    connectionIdRef.current = nextConnectionId;
 
-  const playAudio = (blob: Blob) => {
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audioRef.current = audio;
-    
-    audio.onplay = () => setStatus("playing");
-    audio.onended = () => {
-      setStatus("recording");
-      URL.revokeObjectURL(url);
+    socketRef.current?.close();
+    clearAudioPlayback();
+    stopRecording();
+
+    setError(null);
+    updateStatus("connecting");
+
+    const backendUrl =
+      process.env.NEXT_PUBLIC_VOICE_BACKEND_URL ||
+      `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname || "localhost"}:8000/ws/severus`;
+
+    const socket = new WebSocket(backendUrl);
+    socket.binaryType = "arraybuffer";
+    socketRef.current = socket;
+
+    socket.onopen = () => {
+      if (nextConnectionId !== connectionIdRef.current) {
+        socket.close();
+        return;
+      }
+
+      console.log("Connected to Severus Backend");
+      updateStatus("connected");
+      void startRecording(nextConnectionId);
     };
-    
-    audio.play().catch(err => {
-      console.error("Playback error:", err);
-      setStatus("recording");
-    });
+
+    socket.onmessage = (event) => {
+      if (nextConnectionId !== connectionIdRef.current) {
+        return;
+      }
+
+      if (event.data instanceof ArrayBuffer) {
+        console.log("Received audio buffer from backend");
+        void playAudio(new Blob([event.data], { type: "audio/mpeg" }));
+      }
+    };
+
+    socket.onerror = (err) => {
+      if (nextConnectionId !== connectionIdRef.current) {
+        return;
+      }
+
+      console.error("WebSocket error:", err);
+      setError("WebSocket connection failed");
+      updateStatus("error");
+    };
+
+    socket.onclose = () => {
+      if (nextConnectionId !== connectionIdRef.current) {
+        return;
+      }
+
+      console.log("WebSocket disconnected");
+      socketRef.current = null;
+      clearAudioPlayback();
+      stopRecording();
+
+      if (statusRef.current !== "error") {
+        updateStatus("idle");
+      }
+    };
   };
 
   useEffect(() => {
     connect();
+
     return () => {
+      connectionIdRef.current += 1;
       socketRef.current?.close();
+      socketRef.current = null;
+      clearAudioPlayback();
       stopRecording();
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-      }
     };
   }, []);
 

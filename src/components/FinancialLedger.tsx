@@ -3,9 +3,10 @@
 import React from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { TrendingDown, Minus, ArrowUpRight } from "lucide-react";
+import type { DashboardFinancialEntry } from "@/hooks/useRealtimeDashboard";
 
 interface FinancialLedgerProps {
-  data: any[];
+  data: DashboardFinancialEntry[];
 }
 
 export default function FinancialLedger({ data }: FinancialLedgerProps) {

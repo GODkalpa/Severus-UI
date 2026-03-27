@@ -2,19 +2,25 @@
 
 import React from "react";
 import { motion } from "framer-motion";
+import type { DashboardBiometric } from "@/hooks/useRealtimeDashboard";
 
 interface BiometricsWidgetProps {
-  data: any[];
+  data: DashboardBiometric[];
 }
 
 export default function BiometricsWidget({ data }: BiometricsWidgetProps) {
-  // Use the latest biometric entry if available
-  const latest = data[0] || { calories: 0, heart_rate: 0, steps: 0 };
-  
+  const latestByMetric = data.reduce<Record<string, number>>((acc, entry) => {
+    if (!(entry.metricType in acc)) {
+      acc[entry.metricType] = entry.value;
+    }
+
+    return acc;
+  }, {});
+
   const metrics = [
-    { label: "CALORIES", value: latest.calories || 0, max: 2500, color: "#00F0FF" },
-    { label: "HEART_RATE", value: latest.heart_rate || 72, max: 200, color: "#FF3B3B" },
-    { label: "STEPS", value: latest.steps || 0, max: 10000, color: "#3BFF3B" },
+    { label: "CALORIES", value: latestByMetric.calories || 0, max: 2500, color: "#00F0FF" },
+    { label: "HEART_RATE", value: latestByMetric.heart_rate || 72, max: 200, color: "#FF3B3B" },
+    { label: "STEPS", value: latestByMetric.steps || 0, max: 10000, color: "#3BFF3B" },
   ];
 
   return (
