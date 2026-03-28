@@ -50,7 +50,13 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
       }
     } catch (err: any) {
       console.error(err);
-      setStatus(`ERROR: ${err.message || "HANDSHAKE_FAILED"}`);
+      // Specific check for WebAuthn cancellation or missing key
+      if (err.name === "NotAllowedError" || err.name === "NotFoundError") {
+        setMode("REGISTER");
+        setStatus("UPLINK_REQUIRED_FOR_THIS_DEVICE");
+      } else {
+        setStatus(`ERROR: ${err.message || "HANDSHAKE_FAILED"}`);
+      }
       setIsScanning(false);
     }
   };
@@ -60,12 +66,16 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     const beginRes = await fetch(`${BACKEND_URL}/api/auth/login/begin`);
     if (!beginRes.ok) {
       const err = await beginRes.json();
+      // If the backend says no credentials or we have a handshake failure, 
+      // it's likely a new device.
+      setMode("REGISTER");
+      setStatus("NEW_DEVICE_DETECTED_-_UPLINK_REQUIRED");
       throw new Error(err.detail || "Authentication Challenge Failed");
     }
 
     const { options, challengeId } = await beginRes.json();
     
-    setStatus("WAITING FOR HARDWARE SIGNATURE...");
+    setStatus("CHECK_FINGERPRINT_OR_PASSKEY...");
     const publicKey = recursiveBase64ToBuffer(options.publicKey);
     const credential: any = await navigator.credentials.get({ publicKey });
 
@@ -96,6 +106,9 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
       localStorage.setItem("severus_session", result.sessionToken);
       setTimeout(() => onSuccess(result.sessionToken), 500);
     } else {
+      // If verification fails, it might be a mismatched device
+      setMode("REGISTER");
+      setStatus("IDENTITY_MISMATCH_-_RE_UPLINK");
       throw new Error(result.detail || "Authentication Failed");
     }
   };
@@ -127,6 +140,8 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     const { options, challengeId } = await beginRes.json();
     
     setStatus("CREATING_SECURE_ENCLAVE...");
+    // Update status to be more descriptive about Fingerprint/Passkey on mobile
+    setStatus("CHECK_FINGERPRINT_OR_PASSKEY...");
     const publicKey = recursiveBase64ToBuffer(options.publicKey);
     const credential: any = await navigator.credentials.create({ publicKey });
 
