@@ -8,31 +8,82 @@ export type VoiceAssistantStatus =
   | "connecting"
   | "connected"
   | "recording"
+  | "thinking"
   | "playing"
   | "error";
 
 export function useVoiceAssistant() {
   const [status, setStatus] = useState<VoiceAssistantStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [lastTranscript, setLastTranscript] = useState<string | null>(null);
+  const [amplitude, setAmplitude] = useState(0);
+  const [partialTranscript, setPartialTranscript] = useState<string | null>(null);
+  const [activeModel, setActiveModel] = useState<string>("SVR_CORE_v1");
 
   const socketRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null); 
+  const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const statusRef = useRef<VoiceAssistantStatus>(status);
+  const statusRef = useRef<VoiceAssistantStatus>("idle");
   const connectionIdRef = useRef(0);
   const connectTimeoutRef = useRef<number | null>(null);
+  
+  const audioQueueRef = useRef<Blob[]>([]);
+  const isProcessingQueueRef = useRef(false);
+  const serverFinishedRef = useRef(false);
 
   const updateStatus = (nextStatus: VoiceAssistantStatus) => {
     statusRef.current = nextStatus;
     setStatus(nextStatus);
+    if (nextStatus !== "recording") {
+      setPartialTranscript(null);
+    }
   };
 
   useEffect(() => {
     statusRef.current = status;
+  }, [status]);
+
+  // Amplitude monitoring loop
+  useEffect(() => {
+    let animationFrame: number;
+    
+    const updateAmplitude = () => {
+      if (statusRef.current === "recording" && analyserRef.current) {
+        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+        analyserRef.current.getByteTimeDomainData(dataArray);
+        
+        let sumSquares = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const norm = (dataArray[i] - 128) / 128;
+          sumSquares += norm * norm;
+        }
+        const rms = Math.sqrt(sumSquares / dataArray.length);
+        setAmplitude(Math.min(1, rms * 5)); // Boost for visibility
+      } else if (statusRef.current === "playing" && playbackAnalyserRef.current) {
+        const dataArray = new Uint8Array(playbackAnalyserRef.current.frequencyBinCount);
+        playbackAnalyserRef.current.getByteTimeDomainData(dataArray);
+        
+        let sumSquares = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const norm = (dataArray[i] - 128) / 128;
+          sumSquares += norm * norm;
+        }
+        const rms = Math.sqrt(sumSquares / dataArray.length);
+        setAmplitude(Math.min(1, rms * 5));
+      } else {
+        setAmplitude(0);
+      }
+      animationFrame = requestAnimationFrame(updateAmplitude);
+    };
+
+    updateAmplitude();
+    return () => cancelAnimationFrame(animationFrame);
   }, [status]);
 
   const clearConnectTimeout = () => {
@@ -94,6 +145,9 @@ export function useVoiceAssistant() {
     sourceRef.current?.disconnect();
     sourceRef.current = null;
 
+    analyserRef.current?.disconnect();
+    analyserRef.current = null;
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -109,46 +163,80 @@ export function useVoiceAssistant() {
   };
 
   const playAudio = async (blob: Blob) => {
-    await suspendRecording();
-    clearAudioPlayback();
-    updateStatus("playing");
+    // legacy playAudio - now handled by queue
+    audioQueueRef.current.push(blob);
+    void processAudioQueue();
+  };
 
-    const url = URL.createObjectURL(blob);
-    audioUrlRef.current = url;
-
-    const audio = audioRef.current ?? new Audio();
-    audioRef.current = audio;
-    audio.src = url;
-
-    audio.onplay = () => updateStatus("playing");
-    audio.onended = () => {
-      if (audioUrlRef.current === url) {
-        URL.revokeObjectURL(url);
-        audioUrlRef.current = null;
+  const processAudioQueue = async () => {
+    if (isProcessingQueueRef.current || audioQueueRef.current.length === 0) {
+      // If queue is empty and server sent EOS, we're done
+      if (audioQueueRef.current.length === 0 && serverFinishedRef.current && statusRef.current === "playing") {
+        console.log("Audio queue empty and server finished, resuming recording");
+        updateStatus("recording");
+        serverFinishedRef.current = false;
+        await resumeRecording();
       }
-
-      updateStatus("recording");
-      void resumeRecording();
-    };
-
-    audio.onerror = () => {
-      if (audioUrlRef.current === url) {
-        URL.revokeObjectURL(url);
-        audioUrlRef.current = null;
-      }
-
-      updateStatus("recording");
-      void resumeRecording();
-    };
-
-    try {
-      await audio.play();
-    } catch (err) {
-      console.error("Playback error:", err);
-      clearAudioPlayback();
-      updateStatus("recording");
-      await resumeRecording();
+      return;
     }
+
+    isProcessingQueueRef.current = true;
+    const blob = audioQueueRef.current.shift()!;
+    
+    try {
+      await playAudioSegment(blob);
+    } catch (err) {
+      console.error("Error playing audio segment:", err);
+    } finally {
+      isProcessingQueueRef.current = false;
+      // Continue to next item in queue
+      void processAudioQueue();
+    }
+  };
+
+  const playAudioSegment = (blob: Blob) => {
+    return new Promise<void>(async (resolve) => {
+      await resumeRecording();
+      updateStatus("playing");
+
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      // Setup analyser for playback
+      if (audioContextRef.current) {
+        const source = audioContextRef.current.createMediaElementSource(audio);
+        const analyser = audioContextRef.current.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        analyser.connect(audioContextRef.current.destination);
+        playbackAnalyserRef.current = analyser;
+      }
+      
+      // Track metadata to help with visualization if needed
+      audio.onplay = () => {
+        // Optional: you could update state here if you want to track which segment is playing
+      };
+
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+
+      audio.onerror = (e) => {
+        console.error("Audio segment playback error:", e);
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+
+      try {
+        await audio.play();
+      } catch (err) {
+        console.error("Playback start error:", err);
+        URL.revokeObjectURL(url);
+        resolve();
+      }
+    });
   };
 
   const startRecording = async (connectionId: number) => {
@@ -180,9 +268,12 @@ export function useVoiceAssistant() {
       audioContextRef.current = audioContext;
 
       const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
       sourceRef.current = source;
+      analyserRef.current = analyser;
       processorRef.current = processor;
 
       processor.onaudioprocess = (e) => {
@@ -205,7 +296,8 @@ export function useVoiceAssistant() {
         socketRef.current.send(pcmData.buffer);
       };
 
-      source.connect(processor);
+      source.connect(analyser); // Connect to analyser
+      source.connect(processor); // Also connect to processor
       processor.connect(audioContext.destination);
 
       updateStatus("recording");
@@ -279,8 +371,32 @@ export function useVoiceAssistant() {
       }
 
       if (event.data instanceof ArrayBuffer) {
-        console.log("Received audio buffer from backend");
         void playAudio(new Blob([event.data], { type: "audio/mpeg" }));
+      } else if (typeof event.data === "string") {
+        if (event.data === "THINKING") {
+          console.log("Backend is thinking...");
+          updateStatus("thinking");
+        } else if (event.data.startsWith("TRANSCRIPT:")) {
+          const text = event.data.replace("TRANSCRIPT:", "");
+          setLastTranscript(text);
+          setPartialTranscript(null);
+        } else if (event.data.startsWith("PARTIAL:")) {
+          const text = event.data.replace("PARTIAL:", "");
+          setPartialTranscript(text);
+        } else if (event.data.startsWith("{") && event.data.endsWith("}")) {
+          // Likely system metrics JSON
+          try {
+            const metrics = JSON.parse(event.data);
+            if (metrics.type === "SYSMETRICS") {
+              setActiveModel(metrics.model || activeModel);
+            }
+          } catch(e) {}
+        } else if (event.data === "EOS") {
+          console.log("Received EOS signal from backend");
+          serverFinishedRef.current = true;
+          // Trigger queue processing in case it skipped during empty states
+          void processAudioQueue();
+        }
       }
     };
 
@@ -325,5 +441,12 @@ export function useVoiceAssistant() {
     };
   }, []);
 
-  return { status, error };
+  return { 
+    status, 
+    error, 
+    lastTranscript, 
+    partialTranscript, 
+    amplitude, 
+    activeModel 
+  };
 }

@@ -9,12 +9,12 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        primary: "#00dbe9", // Cyan
-        "primary-container": "#00f0ff",
+        primary: "#00ff41", // Toxic Green
+        "primary-container": "#0ccf3e",
         secondary: "#ff5625", // Orange
         surface: "#000000",
-        outline: "#849495",
-        "on-surface-variant": "#b9cacb",
+        outline: "#003b12",
+        "on-surface-variant": "#d1ffd6",
       },
       fontFamily: {
         mono: ["var(--font-space-mono)", "monospace"],

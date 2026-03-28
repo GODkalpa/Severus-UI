@@ -13,7 +13,7 @@ export default function ActionQueue({ data }: ActionQueueProps) {
   return (
     <div className="flex flex-col gap-4 font-mono p-4 border-r-2 border-primary/20 bg-black/40 w-64 h-64 overflow-hidden">
       <div className="flex justify-between items-center border-b border-primary/20 pb-2 mb-2">
-        <span className="text-[10px] text-primary/60 tracking-[0.2em] uppercase font-bold">Action_Queue</span>
+        <span className="text-[10px] text-primary/60 tracking-[0.2em] uppercase font-bold">Active_Agenda</span>
         <div className="flex gap-1">
           <motion.div 
             className="w-1 h-1 bg-primary"

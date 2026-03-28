@@ -16,7 +16,7 @@ export default function FinancialLedger({ data }: FinancialLedgerProps) {
     <div className="flex flex-col gap-4 font-mono p-4 border border-primary/10 bg-black/60 w-72 h-48 overflow-hidden backdrop-blur-md">
       <div className="flex justify-between items-end mb-2">
         <div>
-          <span className="text-[9px] text-primary/60 tracking-[0.3em] uppercase block mb-1">Financial_Ledger</span>
+          <span className="text-[9px] text-primary/60 tracking-[0.3em] uppercase block mb-1">Fiscal_Summary</span>
           <div className="text-xl font-bold text-white tracking-widest glow-cyan">
             ${total.toFixed(2)}
           </div>
