@@ -32,7 +32,9 @@ export default function HUDLayout({ sessionToken }: HUDLayoutProps) {
     status, 
     error, 
     amplitude,
-    activeModel 
+    activeModel,
+    analyserRef,
+    playbackAnalyserRef
   } = useVoiceAssistant(sessionToken);
   const { actionQueue, financialLedger } = useRealtimeDashboard(sessionToken);
   const [isSubscribed, setIsSubscribed] = React.useState(false);
@@ -212,6 +214,8 @@ export default function HUDLayout({ sessionToken }: HUDLayoutProps) {
                 voiceStatus={status} 
                 amplitude={amplitude}
                 activeModel={activeModel}
+                analyserRef={analyserRef}
+                playbackAnalyserRef={playbackAnalyserRef}
               />
             </motion.div>
             
@@ -260,6 +264,8 @@ export default function HUDLayout({ sessionToken }: HUDLayoutProps) {
               voiceStatus={status} 
               amplitude={amplitude}
               activeModel={activeModel}
+              analyserRef={analyserRef}
+              playbackAnalyserRef={playbackAnalyserRef}
             />
             <div className="text-center">
                <span className="text-[10px] font-mono tracking-[0.3em] text-white/40 uppercase whitespace-nowrap">

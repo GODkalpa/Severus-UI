@@ -22,7 +22,7 @@ export function useVoiceAssistant(sessionToken: string = "") {
 
   const socketRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const processorRef = useRef<AudioNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null); 
   const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
@@ -276,35 +276,26 @@ export function useVoiceAssistant(sessionToken: string = "") {
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      
+      // Load the AudioWorklet module (located in the public/ folder)
+      await audioContext.audioWorklet.addModule('/audio-processor.js');
+      const workletNode = new AudioWorkletNode(audioContext, 'audio-processor');
 
       sourceRef.current = source;
       analyserRef.current = analyser;
-      processorRef.current = processor;
+      processorRef.current = workletNode;
 
-      processor.onaudioprocess = (e) => {
-        if (socketRef.current?.readyState !== WebSocket.OPEN) {
-          return;
-        }
-
-        if (statusRef.current !== "recording") {
-          return;
-        }
-
-        const inputData = e.inputBuffer.getChannelData(0);
-        const pcmData = new Int16Array(inputData.length);
-
-        for (let i = 0; i < inputData.length; i++) {
-          const sample = Math.max(-1, Math.min(1, inputData[i]));
-          pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-        }
-
-        socketRef.current.send(pcmData.buffer);
+      workletNode.port.onmessage = (event) => {
+        if (socketRef.current?.readyState !== WebSocket.OPEN) return;
+        if (statusRef.current !== "recording") return;
+        
+        // This is high-performance binary audio data coming from the worklet thread
+        socketRef.current.send(event.data);
       };
 
-      source.connect(analyser); // Connect to analyser
-      source.connect(processor); // Also connect to processor
-      processor.connect(audioContext.destination);
+      source.connect(analyser);
+      source.connect(workletNode);
+      workletNode.connect(audioContext.destination);
 
       updateStatus("recording");
     } catch (err) {
@@ -470,11 +461,13 @@ export function useVoiceAssistant(sessionToken: string = "") {
   }, []);
 
   return { 
-    status, 
-    error, 
-    lastTranscript, 
-    partialTranscript, 
-    amplitude, 
-    activeModel 
+    status,
+    error,
+    lastTranscript,
+    partialTranscript,
+    amplitude,
+    activeModel,
+    analyserRef,
+    playbackAnalyserRef
   };
 }
