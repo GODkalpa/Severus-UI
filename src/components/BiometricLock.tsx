@@ -108,7 +108,8 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     }
 
     setStatus("CLAIMING_OWNERSHIP...");
-    const userId = "severus-owner-" + Math.random().toString(36).substring(7);
+    // Use a fixed userId on the client side too for a cleaner "one owner, many keys" model
+    const userId = "severus-owner-fixed";
     const beginRes = await fetch(`${BACKEND_URL}/api/auth/register/begin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -257,6 +258,30 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
                 {isScanning ? "AUTHENTICATING..." : mode === "REGISTER" ? "REVELIO_INIT" : "REVELIO"}
               </span>
             </button>
+            
+            {mode === "LOGIN" && (
+              <button 
+                onClick={() => {
+                  setMode("REGISTER");
+                  setStatus("UPLINK_NEW_HARDWARE");
+                }}
+                className="font-mono text-[10px] text-primary/40 hover:text-primary transition-colors uppercase tracking-[0.2em]"
+              >
+                [ REGISTER_NEW_DEVICE ]
+              </button>
+            )}
+
+            {mode === "REGISTER" && (
+              <button 
+                onClick={() => {
+                  setMode("LOGIN");
+                  setStatus("READY_TO_REVEAL");
+                }}
+                className="font-mono text-[10px] text-yellow-400/40 hover:text-yellow-400 transition-colors uppercase tracking-[0.2em]"
+              >
+                [ RETURN_TO_LOGIN ]
+              </button>
+            )}
             
             <p className="font-mono text-on-surface-variant/40 text-[8px] tracking-[0.4em] uppercase">
               Secure Hardware Handshake V4.2
