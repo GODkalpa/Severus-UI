@@ -203,13 +203,19 @@ export function useVoiceAssistant(sessionToken: string = "") {
       const audio = new Audio(url);
       audioRef.current = audio;
 
-      // Setup analyser for playback
+      // Setup analyser and gain for playback (software volume boost)
       if (audioContextRef.current) {
         const source = audioContextRef.current.createMediaElementSource(audio);
         const analyser = audioContextRef.current.createAnalyser();
+        const gainNode = audioContextRef.current.createGain();
+        
         analyser.fftSize = 256;
+        gainNode.gain.value = 2.0; // 2x volume boost
+        
         source.connect(analyser);
-        analyser.connect(audioContextRef.current.destination);
+        analyser.connect(gainNode);
+        gainNode.connect(audioContextRef.current.destination);
+        
         playbackAnalyserRef.current = analyser;
       }
       
@@ -339,6 +345,12 @@ export function useVoiceAssistant(sessionToken: string = "") {
       return;
     }
 
+    if (!sessionToken) {
+      console.warn("No session token provided, skipping voice connection.");
+      updateStatus("idle");
+      return;
+    }
+
     const socket = new WebSocket(backendUrl);
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
@@ -396,6 +408,13 @@ export function useVoiceAssistant(sessionToken: string = "") {
             const metrics = JSON.parse(event.data);
             if (metrics.type === "SYSMETRICS") {
               setActiveModel(metrics.model || activeModel);
+            } else if (metrics.type === "ERROR") {
+              console.error("Backend Error:", metrics.message, metrics.detail);
+              setError(metrics.message === "UNAUTHORIZED" 
+                ? "Authentication failed. Please log in again." 
+                : metrics.message);
+              updateStatus("error");
+              socket.close();
             }
           } catch(e) {}
         } else if (event.data === "EOS") {
@@ -436,7 +455,9 @@ export function useVoiceAssistant(sessionToken: string = "") {
   };
 
   useEffect(() => {
-    connect();
+    if (sessionToken) {
+      connect();
+    }
 
     return () => {
       connectionIdRef.current += 1;
