@@ -80,7 +80,7 @@ const mapFinancialEntry = (row: DbRow): DashboardFinancialEntry => ({
   loggedAt: asNullableString(row.logged_at),
 });
 
-export function useRealtimeDashboard() {
+export function useRealtimeDashboard(sessionToken: string = "") {
   const [biometrics, setBiometrics] = useState<DashboardBiometric[]>([]);
   const [actionQueue, setActionQueue] = useState<DashboardActionItem[]>([]);
   const [financialLedger, setFinancialLedger] = useState<DashboardFinancialEntry[]>([]);
@@ -95,9 +95,11 @@ export function useRealtimeDashboard() {
     let isActive = true;
     let abortController: AbortController | null = null;
     const pollInterval = 30000;
-    const endpoint = `${backendBaseUrl}/api/dashboard`;
+    const endpoint = `${backendBaseUrl}/api/dashboard?token=${sessionToken}`;
 
     const fetchData = async () => {
+      if (!sessionToken) return; // Don't fetch without token
+      
       abortController?.abort();
       abortController = new AbortController();
 
@@ -148,7 +150,7 @@ export function useRealtimeDashboard() {
       window.clearInterval(intervalId);
       abortController?.abort();
     };
-  }, []);
+  }, [sessionToken]);
 
   return { biometrics, actionQueue, financialLedger };
 }

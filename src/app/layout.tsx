@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Space_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -10,7 +10,26 @@ const spaceMono = Space_Mono({
 
 export const metadata: Metadata = {
   title: "SEVERUS HUD v4.0",
-  description: "Advanced AI Command Center",
+  description: "Advanced AI Command Center - Level 4 Clearance",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "SEVERUS",
+  },
+  icons: [
+    { rel: "icon", url: "/icon.png" },
+    { rel: "apple-touch-icon", url: "/icon.png" },
+  ],
+};
+
+export const viewport: Viewport = {
+  themeColor: "#00ff41",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

@@ -2,45 +2,151 @@
 
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Fingerprint, Loader2 } from "lucide-react";
+import { Fingerprint, Lock, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { bufferToBase64, base64ToBuffer, recursiveBase64ToBuffer } from "@/lib/webauthn";
 
 interface BiometricLockProps {
-  onSuccess: () => void;
+  onSuccess: (token: string) => void;
 }
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8001";
 
 export default function BiometricLock({ onSuccess }: BiometricLockProps) {
   const [isScanning, setIsScanning] = useState(false);
-  const [status, setStatus] = useState("AWAITING WEBAUTHN VERIFICATION...");
-  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState("INITIALIZING SECURITY...");
+  const [mode, setMode] = useState<"LOGIN" | "REGISTER" | "CHECKING">("CHECKING");
+  const [masterSecret, setMasterSecret] = useState("");
 
-  const startScan = async () => {
-    if (isScanning) return;
-    
-    setIsScanning(true);
-    setStatus("INITIALIZING BIOMETRIC HANDSHAKE...");
-    
-    // Mock WebAuthn / Biometric Scan
-    for (let i = 0; i <= 100; i += 5) {
-      setProgress(i);
-      if (i === 40) setStatus("VERIFYING NEURAL SIGNATURE...");
-      if (i === 80) setStatus("DECRYPTING SECURE ENCLAVE...");
-      await new Promise((resolve) => setTimeout(resolve, 80));
+  useEffect(() => {
+    checkAvailability();
+  }, []);
+
+  const checkAvailability = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/auth/login/begin`);
+      if (res.ok) {
+        setMode("LOGIN");
+        setStatus("READY TO REVEAL");
+      } else {
+        setMode("REGISTER");
+        setStatus("NO KEY DETECTED - MASTER SECRET REQUIRED");
+      }
+    } catch (err) {
+      console.error("Backend unavailable", err);
+      setStatus("METEOROLOGICAL_SENSORS_OFFLINE");
     }
+  };
+
+  const handleAuth = async () => {
+    if (isScanning) return;
+    setIsScanning(true);
     
-    setStatus("ACCESS GRANTED");
-    setTimeout(() => {
-      onSuccess();
-    }, 500);
+    try {
+      if (mode === "LOGIN") {
+        await login();
+      } else {
+        await register();
+      }
+    } catch (err: any) {
+      console.error(err);
+      setStatus(`ERROR: ${err.message || "HANDSHAKE_FAILED"}`);
+      setIsScanning(false);
+    }
+  };
+
+  const login = async () => {
+    setStatus("GENERATING_CHALLENGE...");
+    const beginRes = await fetch(`${BACKEND_URL}/api/auth/login/begin`);
+    const { options, challengeId } = await beginRes.json();
+    
+    setStatus("WAITING FOR HARDWARE SIGNATURE...");
+    const publicKey = recursiveBase64ToBuffer(options.publicKey);
+    const credential: any = await navigator.credentials.get({ publicKey });
+
+    setStatus("VERIFYING_SIGNATURE...");
+    const completeRes = await fetch(`${BACKEND_URL}/api/auth/login/complete?challenge_id=${challengeId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: credential.id,
+        rawId: bufferToBase64(credential.rawId),
+        type: credential.type,
+        response: {
+          authenticatorData: bufferToBase64(credential.response.authenticatorData),
+          clientDataJSON: bufferToBase64(credential.response.clientDataJSON),
+          signature: bufferToBase64(credential.response.signature),
+          userHandle: credential.response.userHandle ? bufferToBase64(credential.response.userHandle) : null,
+        },
+      }),
+    });
+
+    const result = await completeRes.json();
+    if (result.status === "success") {
+      setStatus("ACCESS GRANTED");
+      localStorage.setItem("severus_session", result.sessionToken);
+      setTimeout(() => onSuccess(result.sessionToken), 500);
+    } else {
+      throw new Error(result.detail || "Authentication Failed");
+    }
+  };
+
+  const register = async () => {
+    if (!masterSecret) {
+      setStatus("MASTER SECRET REQUIRED");
+      setIsScanning(false);
+      return;
+    }
+
+    setStatus("CLAIMING_OWNERSHIP...");
+    const userId = "severus-owner-" + Math.random().toString(36).substring(7);
+    const beginRes = await fetch(`${BACKEND_URL}/api/auth/register/begin?user_id=${userId}&master_secret=${masterSecret}`);
+    
+    if (!beginRes.ok) {
+      const err = await beginRes.json();
+      throw new Error(err.detail || "Registration Challenge Failed");
+    }
+
+    const { options, challengeId } = await beginRes.json();
+    
+    setStatus("CREATING_SECURE_ENCLAVE...");
+    const publicKey = recursiveBase64ToBuffer(options.publicKey);
+    const credential: any = await navigator.credentials.create({ publicKey });
+
+    setStatus("FINALIZING_KEY...");
+    const completeRes = await fetch(`${BACKEND_URL}/api/auth/register/complete?challenge_id=${challengeId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: credential.id,
+        rawId: bufferToBase64(credential.rawId),
+        type: credential.type,
+        response: {
+          attestationObject: bufferToBase64(credential.response.attestationObject),
+          clientDataJSON: bufferToBase64(credential.response.clientDataJSON),
+        },
+      }),
+    });
+
+    const result = await completeRes.json();
+    if (result.status === "success") {
+      setStatus("KEY REGISTERED");
+      setMode("LOGIN");
+      setIsScanning(false);
+      // Automatically attempt login after registration
+      setTimeout(handleAuth, 1000);
+    } else {
+      throw new Error("Registration Verification Failed");
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm select-none">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md select-none">
       <div className="flex flex-col items-center max-w-lg w-full px-4 text-center">
         {/* Biometric Core */}
         <motion.div 
           className="relative group cursor-pointer mb-12"
-          onClick={startScan}
+          onClick={handleAuth}
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: 0.8, ease: "easeOut" }}
@@ -51,21 +157,25 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
           <div className="absolute -bottom-8 -left-8 w-6 h-6 border-b-2 border-l-2 border-primary/40" />
           <div className="absolute -bottom-8 -right-8 w-6 h-6 border-b-2 border-r-2 border-primary/40" />
           
-          {/* Fingerprint Container */}
+          {/* Icon Container */}
           <div className="relative p-8 overflow-hidden rounded-none">
-            <Fingerprint 
-              size={160} 
-              className={cn(
-                "text-primary transition-all duration-1000",
-                isScanning ? "opacity-50 blur-[1px]" : "glow-lg"
-              )} 
-            />
+            {mode === "REGISTER" ? (
+              <ShieldCheck size={160} className={cn("text-yellow-400 glow-yellow", isScanning && "animate-pulse")} />
+            ) : (
+              <Fingerprint 
+                size={160} 
+                className={cn(
+                  "text-primary transition-all duration-1000",
+                  isScanning ? "opacity-30 blur-[2px]" : "glow-lg"
+                )} 
+              />
+            )}
             
             {/* Active Scan Line */}
             <AnimatePresence>
               {isScanning && (
                 <motion.div 
-                  className="absolute top-0 left-0 w-full h-[2px] bg-primary shadow-[0_0_15px_#00f0ff,0_0_30px_#00f0ff]"
+                  className="absolute top-0 left-0 w-full h-[2px] bg-primary shadow-[0_0_15px_#00f0ff]"
                   initial={{ top: "0%" }}
                   animate={{ top: "100%" }}
                   exit={{ opacity: 0 }}
@@ -78,27 +188,10 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
               )}
             </AnimatePresence>
           </div>
-
-          {/* Decorative Data Flanks */}
-          <div className="absolute -left-32 top-1/2 -translate-y-1/2 flex flex-col gap-1 items-end hidden md:flex font-mono">
-            <div className="text-[8px] text-outline tracking-widest opacity-60">0x7F4A22</div>
-            <div className={cn("text-[8px] tracking-widest font-bold", isScanning ? "text-primary" : "text-secondary")}>
-              {isScanning ? "SCANNING" : "LOCKED"}
-            </div>
-            <div className="text-[8px] text-outline tracking-widest opacity-60">PRTCL_V8</div>
-          </div>
-          
-          <div className="absolute -right-32 top-1/2 -translate-y-1/2 flex flex-col gap-1 items-start hidden md:flex font-mono">
-            <div className="text-[8px] text-outline tracking-widest opacity-60">ENCRYPT:AES-256</div>
-            <div className="text-[8px] text-primary tracking-widest font-bold">READY</div>
-            <div className="text-[8px] text-outline tracking-widest opacity-60">
-              {isScanning ? `${progress}%` : "WAITING..."}
-            </div>
-          </div>
         </motion.div>
 
-        {/* Status Messaging */}
-        <div className="space-y-4">
+        {/* Interaction Group */}
+        <div className="space-y-6 w-full max-w-sm">
           <div className="flex items-center justify-center gap-3">
             <motion.span 
               className="w-2 h-2 bg-primary"
@@ -109,48 +202,46 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
               {status}
             </h1>
           </div>
-          <p className="font-mono text-on-surface-variant/80 text-[10px] tracking-[0.3em] uppercase max-w-xs mx-auto">
-            Biometric handshake required for level 4 clearance to [AETHER_CORE]
-          </p>
-        </div>
 
-        {/* Action Cluster */}
-        <div className="mt-16 flex flex-col items-center gap-6">
-          <button 
-            className="px-8 py-3 border border-primary/30 text-primary text-xs tracking-[0.2em] font-bold hover:bg-primary hover:text-black transition-all duration-300 uppercase group relative overflow-hidden rounded-none"
-            onClick={startScan}
-            disabled={isScanning}
-          >
-            <span className="relative z-10 group-hover:tracking-[0.4em] transition-all duration-500">
-              {isScanning ? `Processing_${progress}%` : "Initialize_Local_Key"}
-            </span>
-          </button>
-          
-          <div className="flex items-center gap-4">
-            <div className="h-[1px] w-8 bg-outline/30" />
-            <button className="text-[10px] text-on-surface-variant hover:text-white transition-opacity tracking-widest uppercase opacity-60">
-              [ ABORT_UPLINK ]
+          <AnimatePresence>
+            {mode === "REGISTER" && !isScanning && (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-4"
+              >
+                <input 
+                  type="password"
+                  placeholder="ENTER_MASTER_SECRET"
+                  value={masterSecret}
+                  onChange={(e) => setMasterSecret(e.target.value)}
+                  className="w-full bg-black/40 border border-primary/20 p-3 font-mono text-primary text-center text-sm focus:outline-none focus:border-primary/60 transition-colors uppercase tracking-widest placeholder:opacity-30"
+                />
+                <p className="font-mono text-[10px] text-yellow-400/60 uppercase">
+                  First-time setup: Claim ownership using your secret
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="flex flex-col items-center gap-6 mt-8">
+            <button 
+              className={cn(
+                "px-12 py-4 border border-primary/40 text-primary text-sm tracking-[0.3em] font-bold transition-all duration-300 uppercase relative overflow-hidden group",
+                isScanning ? "opacity-50 cursor-not-allowed" : "hover:bg-primary/10"
+              )}
+              onClick={handleAuth}
+              disabled={isScanning}
+            >
+              <span className="relative z-10">
+                {isScanning ? "AUTHENTICATING..." : mode === "REGISTER" ? "REVELIO_INIT" : "REVELIO"}
+              </span>
             </button>
-            <div className="h-[1px] w-8 bg-outline/30" />
+            
+            <p className="font-mono text-on-surface-variant/40 text-[8px] tracking-[0.4em] uppercase">
+              Secure Hardware Handshake V4.2
+            </p>
           </div>
-        </div>
-
-        {/* Progress Bar (Visual Only) */}
-        {isScanning && (
-          <div className="absolute bottom-0 left-0 w-full h-1 bg-white/5">
-            <motion.div 
-              className="h-full bg-primary shadow-[0_0_10px_#00f0ff]"
-              initial={{ width: 0 }}
-              animate={{ width: `${progress}%` }}
-            />
-          </div>
-        )}
-
-        {/* Footer Environmental Chatter */}
-        <div className="mt-24 font-mono text-[8px] text-outline opacity-40 uppercase tracking-[0.4em] flex justify-between w-full">
-          <span>Node: 127.0.0.1</span>
-          <span>Latency: 12ms</span>
-          <span>Secure_Socket: Active</span>
         </div>
       </div>
     </div>

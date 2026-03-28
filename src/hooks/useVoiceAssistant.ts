@@ -12,7 +12,7 @@ export type VoiceAssistantStatus =
   | "playing"
   | "error";
 
-export function useVoiceAssistant() {
+export function useVoiceAssistant(sessionToken: string = "") {
   const [status, setStatus] = useState<VoiceAssistantStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastTranscript, setLastTranscript] = useState<string | null>(null);
@@ -360,7 +360,14 @@ export function useVoiceAssistant() {
       }
 
       clearConnectTimeout();
-      console.log("Connected to Severus Backend");
+      console.log("Connected to Severus Backend - Sending Auth Handshake");
+      
+      // Send authentication message first
+      socket.send(JSON.stringify({
+        type: "AUTH",
+        token: sessionToken
+      }));
+
       updateStatus("connected");
       void startRecording(nextConnectionId);
     };
