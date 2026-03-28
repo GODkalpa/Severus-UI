@@ -28,9 +28,20 @@ export function recursiveBase64ToBuffer(obj: any): any {
 
   const newObj: any = {};
   for (const [key, value] of Object.entries(obj)) {
-    if (typeof value === "string" && (key === "challenge" || key === "id" || key === "userHandle")) {
+    if (typeof value === "string" && (key === "challenge" || key === "userHandle")) {
       newObj[key] = base64ToBuffer(value);
+    } else if (key === "user" && typeof value === "object" && value !== null) {
+      const user = value as any;
+      newObj[key] = {
+        ...user,
+        id: typeof user.id === "string" ? base64ToBuffer(user.id) : user.id,
+      };
     } else if (key === "allowCredentials" && Array.isArray(value)) {
+      newObj[key] = value.map((cred: any) => ({
+        ...cred,
+        id: base64ToBuffer(cred.id),
+      }));
+    } else if (key === "excludeCredentials" && Array.isArray(value)) {
       newObj[key] = value.map((cred: any) => ({
         ...cred,
         id: base64ToBuffer(cred.id),
