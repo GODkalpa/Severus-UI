@@ -26,14 +26,12 @@ export function useVoiceAssistant(sessionToken: string = "") {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null); 
   
-  // Persistent Playback Refs
-  const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
+  // Persistent Playback Refs (Web Audio Graph)
   const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
   const playbackGainRef = useRef<GainNode | null>(null);
-  const playbackSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const playbackCompressorRef = useRef<DynamicsCompressorNode | null>(null);
+  const nextPlaybackTimeRef = useRef<number>(0);
   
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const statusRef = useRef<VoiceAssistantStatus>("idle");
   const connectionIdRef = useRef(0);
@@ -102,20 +100,8 @@ export function useVoiceAssistant(sessionToken: string = "") {
   };
 
   const clearAudioPlayback = () => {
-    const audio = audioRef.current;
-    if (audio) {
-      audio.onplay = null;
-      audio.onended = null;
-      audio.onerror = null;
-      audio.pause();
-      audio.removeAttribute("src");
-      audio.load();
-    }
-
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
+    nextPlaybackTimeRef.current = 0;
+    // We don't necessarily need to revoke URLs anymore as we work with buffers
   };
 
   const suspendRecording = async () => {
@@ -160,17 +146,13 @@ export function useVoiceAssistant(sessionToken: string = "") {
     }
 
     // Clean up persistent playback
-    if (playbackAudioRef.current) {
-      playbackAudioRef.current.pause();
-      playbackAudioRef.current.src = "";
-      playbackAudioRef.current = null;
-    }
-    playbackSourceRef.current?.disconnect();
     playbackGainRef.current?.disconnect();
     playbackAnalyserRef.current?.disconnect();
-    playbackSourceRef.current = null;
+    playbackCompressorRef.current?.disconnect();
     playbackGainRef.current = null;
     playbackAnalyserRef.current = null;
+    playbackCompressorRef.current = null;
+    nextPlaybackTimeRef.current = 0;
 
     const audioContext = audioContextRef.current;
     audioContextRef.current = null;
@@ -182,96 +164,79 @@ export function useVoiceAssistant(sessionToken: string = "") {
   };
 
   const playAudio = async (blob: Blob) => {
-    // legacy playAudio - now handled by queue
-    audioQueueRef.current.push(blob);
-    void processAudioQueue();
-  };
-
-  const processAudioQueue = async () => {
-    if (isProcessingQueueRef.current || audioQueueRef.current.length === 0) {
-      // If queue is empty and server sent EOS, we're done
-      if (audioQueueRef.current.length === 0 && serverFinishedRef.current && statusRef.current === "playing") {
-        console.log("Audio queue empty and server finished, resuming recording");
-        updateStatus("recording");
-        serverFinishedRef.current = false;
-        await resumeRecording();
-      }
-      return;
-    }
-
-    isProcessingQueueRef.current = true;
-    const blob = audioQueueRef.current.shift()!;
+    // 1. ArrayBuffer is easier to handle for decoding
+    const arrayBuffer = await blob.arrayBuffer();
     
     try {
-      await playAudioSegment(blob);
-    } catch (err) {
-      console.error("Error playing audio segment:", err);
-    } finally {
-      isProcessingQueueRef.current = false;
-      // Continue to next item in queue
-      void processAudioQueue();
-    }
-  };
+      const audioContext = audioContextRef.current;
+      if (!audioContext) return;
 
-  const playAudioSegment = (blob: Blob) => {
-    return new Promise<void>(async (resolve) => {
-      try {
-        const audioContext = audioContextRef.current;
-        if (!audioContext) {
-          resolve();
-          return;
-        }
-
-        // 1. Ensure AudioContext is running (Required for Mobile)
-        if (audioContext.state === "suspended") {
-          await audioContext.resume();
-        }
-
-        updateStatus("playing");
-
-        // 2. Setup Persistent Playback Graph ONCE
-        if (!playbackAudioRef.current) {
-          const audio = new Audio();
-          audio.autoplay = false;
-          playbackAudioRef.current = audio;
-
-          const source = audioContext.createMediaElementSource(audio);
-          const analyser = audioContext.createAnalyser();
-          const gainNode = audioContext.createGain();
-          
-          analyser.fftSize = 256;
-          gainNode.gain.value = 5.0; // 5x volume boost for mobile
-          
-          source.connect(analyser);
-          analyser.connect(gainNode);
-          gainNode.connect(audioContext.destination);
-          
-          playbackSourceRef.current = source;
-          playbackAnalyserRef.current = analyser;
-          playbackGainRef.current = gainNode;
-        }
-
-        const audio = playbackAudioRef.current;
-        const url = URL.createObjectURL(blob);
-        
-        audio.src = url;
-        audio.onended = () => {
-          URL.revokeObjectURL(url);
-          resolve();
-        };
-
-        audio.onerror = (e) => {
-          console.error("Segment playback error:", e);
-          URL.revokeObjectURL(url);
-          resolve();
-        };
-
-        await audio.play();
-      } catch (err) {
-        console.error("Audio segment catch:", err);
-        resolve();
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
       }
-    });
+
+      // 2. Decode the aggregated MP3 block
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      // 3. Setup Persistent Audio Graph if not already
+      if (!playbackGainRef.current) {
+        const analyser = audioContext.createAnalyser();
+        const gainNode = audioContext.createGain();
+        const compressor = audioContext.createDynamicsCompressor();
+
+        analyser.fftSize = 256;
+        
+        // Massive volume boost (8x) with a compressor to prevent mobile clipping
+        gainNode.gain.value = 8.0; 
+        
+        compressor.threshold.setValueAtTime(-24, audioContext.currentTime);
+        compressor.knee.setValueAtTime(40, audioContext.currentTime);
+        compressor.ratio.setValueAtTime(12, audioContext.currentTime);
+        compressor.attack.setValueAtTime(0, audioContext.currentTime);
+        compressor.release.setValueAtTime(0.25, audioContext.currentTime);
+
+        // Chain: Source -> Analyser -> Gain -> Compressor -> Destination
+        analyser.connect(gainNode);
+        gainNode.connect(compressor);
+        compressor.connect(audioContext.destination);
+
+        playbackAnalyserRef.current = analyser;
+        playbackGainRef.current = gainNode;
+        playbackCompressorRef.current = compressor;
+      }
+
+      // 4. Schedule Playback
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(playbackAnalyserRef.current!);
+
+      // Calculate start time
+      const now = audioContext.currentTime;
+      let startTime = nextPlaybackTimeRef.current;
+
+      // If we've drifted too far, reset to now
+      if (startTime < now) {
+        startTime = now + 0.05; // Tiny buffer for safety
+      }
+
+      source.start(startTime);
+      updateStatus("playing");
+
+      // Update next end time
+      nextPlaybackTimeRef.current = startTime + audioBuffer.duration;
+
+      source.onended = () => {
+        // If current time is past the end of the scheduled queue, resume recording
+        if (audioContext.currentTime >= nextPlaybackTimeRef.current - 0.1 && serverFinishedRef.current) {
+          console.log("Speech finished, resuming recording mode.");
+          updateStatus("recording");
+          serverFinishedRef.current = false;
+        }
+      };
+
+    } catch (err) {
+      console.error("Audio scheduling failed:", err);
+    }
   };
 
   const startRecording = async (connectionId: number) => {
@@ -440,8 +405,6 @@ export function useVoiceAssistant(sessionToken: string = "") {
         } else if (event.data === "EOS") {
           console.log("Received EOS signal from backend");
           serverFinishedRef.current = true;
-          // Trigger queue processing in case it skipped during empty states
-          void processAudioQueue();
         }
       }
     };
@@ -496,6 +459,7 @@ export function useVoiceAssistant(sessionToken: string = "") {
     partialTranscript,
     amplitude,
     activeModel,
+    connect,
     analyserRef,
     playbackAnalyserRef
   };

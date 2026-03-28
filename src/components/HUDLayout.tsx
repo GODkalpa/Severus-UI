@@ -33,6 +33,7 @@ export default function HUDLayout({ sessionToken }: HUDLayoutProps) {
     error, 
     amplitude,
     activeModel,
+    connect,
     analyserRef,
     playbackAnalyserRef
   } = useVoiceAssistant(sessionToken);
@@ -158,17 +159,29 @@ export default function HUDLayout({ sessionToken }: HUDLayoutProps) {
                 }>{getStatusText()}</span>
               </h2>
 
-              {/* Notification Toggle */}
-              {!isSubscribed && (
-                <button 
-                  onClick={subscribeToPush}
-                  className="ml-4 p-2 rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-400 hover:bg-amber-400/20 transition-all animate-pulse"
-                  title="Enable 24/7 Context Engine"
-                >
-                  <span className="text-xs font-mono mr-2 hidden md:inline">REVELIO_NOTIFY</span>
-                  🔔
-                </button>
-              )}
+              {/* Status Actions */}
+              <div className="flex items-center gap-2">
+                {status === "error" && (
+                  <button 
+                    onClick={() => connect()}
+                    className="px-4 py-1 border border-red-500/40 bg-red-500/10 text-red-500 text-xs font-mono hover:bg-red-500/20 transition-all animate-pulse"
+                  >
+                    [ RE-LINK SYSTEM ]
+                  </button>
+                )}
+
+                {/* Notification Toggle */}
+                {!isSubscribed && (
+                  <button 
+                    onClick={subscribeToPush}
+                    className="ml-4 p-2 rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-400 hover:bg-amber-400/20 transition-all animate-pulse"
+                    title="Enable 24/7 Context Engine"
+                  >
+                    <span className="text-xs font-mono mr-2 hidden md:inline">REVELIO_NOTIFY</span>
+                    🔔
+                  </button>
+                )}
+              </div>
             </div>
             <div className="hidden md:block w-16 h-px bg-primary/20" />
           </div>
