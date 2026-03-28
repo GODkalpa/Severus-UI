@@ -25,7 +25,13 @@ export function useVoiceAssistant(sessionToken: string = "") {
   const processorRef = useRef<AudioNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null); 
+  
+  // Persistent Playback Refs
+  const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
   const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
+  const playbackGainRef = useRef<GainNode | null>(null);
+  const playbackSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -153,6 +159,19 @@ export function useVoiceAssistant(sessionToken: string = "") {
       streamRef.current = null;
     }
 
+    // Clean up persistent playback
+    if (playbackAudioRef.current) {
+      playbackAudioRef.current.pause();
+      playbackAudioRef.current.src = "";
+      playbackAudioRef.current = null;
+    }
+    playbackSourceRef.current?.disconnect();
+    playbackGainRef.current?.disconnect();
+    playbackAnalyserRef.current?.disconnect();
+    playbackSourceRef.current = null;
+    playbackGainRef.current = null;
+    playbackAnalyserRef.current = null;
+
     const audioContext = audioContextRef.current;
     audioContextRef.current = null;
     if (audioContext) {
@@ -196,50 +215,60 @@ export function useVoiceAssistant(sessionToken: string = "") {
 
   const playAudioSegment = (blob: Blob) => {
     return new Promise<void>(async (resolve) => {
-      await resumeRecording();
-      updateStatus("playing");
-
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-
-      // Setup analyser and gain for playback (software volume boost)
-      if (audioContextRef.current) {
-        const source = audioContextRef.current.createMediaElementSource(audio);
-        const analyser = audioContextRef.current.createAnalyser();
-        const gainNode = audioContextRef.current.createGain();
-        
-        analyser.fftSize = 256;
-        gainNode.gain.value = 2.0; // 2x volume boost
-        
-        source.connect(analyser);
-        analyser.connect(gainNode);
-        gainNode.connect(audioContextRef.current.destination);
-        
-        playbackAnalyserRef.current = analyser;
-      }
-      
-      // Track metadata to help with visualization if needed
-      audio.onplay = () => {
-        // Optional: you could update state here if you want to track which segment is playing
-      };
-
-      audio.onended = () => {
-        URL.revokeObjectURL(url);
-        resolve();
-      };
-
-      audio.onerror = (e) => {
-        console.error("Audio segment playback error:", e);
-        URL.revokeObjectURL(url);
-        resolve();
-      };
-
       try {
+        const audioContext = audioContextRef.current;
+        if (!audioContext) {
+          resolve();
+          return;
+        }
+
+        // 1. Ensure AudioContext is running (Required for Mobile)
+        if (audioContext.state === "suspended") {
+          await audioContext.resume();
+        }
+
+        updateStatus("playing");
+
+        // 2. Setup Persistent Playback Graph ONCE
+        if (!playbackAudioRef.current) {
+          const audio = new Audio();
+          audio.autoplay = false;
+          playbackAudioRef.current = audio;
+
+          const source = audioContext.createMediaElementSource(audio);
+          const analyser = audioContext.createAnalyser();
+          const gainNode = audioContext.createGain();
+          
+          analyser.fftSize = 256;
+          gainNode.gain.value = 5.0; // 5x volume boost for mobile
+          
+          source.connect(analyser);
+          analyser.connect(gainNode);
+          gainNode.connect(audioContext.destination);
+          
+          playbackSourceRef.current = source;
+          playbackAnalyserRef.current = analyser;
+          playbackGainRef.current = gainNode;
+        }
+
+        const audio = playbackAudioRef.current;
+        const url = URL.createObjectURL(blob);
+        
+        audio.src = url;
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+
+        audio.onerror = (e) => {
+          console.error("Segment playback error:", e);
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+
         await audio.play();
       } catch (err) {
-        console.error("Playback start error:", err);
-        URL.revokeObjectURL(url);
+        console.error("Audio segment catch:", err);
         resolve();
       }
     });
