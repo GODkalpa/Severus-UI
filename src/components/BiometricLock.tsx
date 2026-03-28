@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Fingerprint, Lock, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { bufferToBase64, base64ToBuffer, recursiveBase64ToBuffer } from "@/lib/webauthn";
+import { bufferToBase64, recursiveBase64ToBuffer } from "@/lib/webauthn";
 
 interface BiometricLockProps {
   onSuccess: (token: string) => void;
@@ -58,6 +58,11 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
   const login = async () => {
     setStatus("GENERATING_CHALLENGE...");
     const beginRes = await fetch(`${BACKEND_URL}/api/auth/login/begin`);
+    if (!beginRes.ok) {
+      const err = await beginRes.json();
+      throw new Error(err.detail || "Authentication Challenge Failed");
+    }
+
     const { options, challengeId } = await beginRes.json();
     
     setStatus("WAITING FOR HARDWARE SIGNATURE...");
@@ -82,6 +87,10 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     });
 
     const result = await completeRes.json();
+    if (!completeRes.ok) {
+      throw new Error(result.detail || "Authentication Failed");
+    }
+
     if (result.status === "success") {
       setStatus("ACCESS GRANTED");
       localStorage.setItem("severus_session", result.sessionToken);
@@ -100,7 +109,14 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
 
     setStatus("CLAIMING_OWNERSHIP...");
     const userId = "severus-owner-" + Math.random().toString(36).substring(7);
-    const beginRes = await fetch(`${BACKEND_URL}/api/auth/register/begin?user_id=${userId}&master_secret=${masterSecret}`);
+    const beginRes = await fetch(`${BACKEND_URL}/api/auth/register/begin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId,
+        master_secret: masterSecret,
+      }),
+    });
     
     if (!beginRes.ok) {
       const err = await beginRes.json();
@@ -129,6 +145,10 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     });
 
     const result = await completeRes.json();
+    if (!completeRes.ok) {
+      throw new Error(result.detail || "Registration Verification Failed");
+    }
+
     if (result.status === "success") {
       setStatus("KEY REGISTERED");
       setMode("LOGIN");
