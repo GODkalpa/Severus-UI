@@ -1,14 +1,27 @@
 "use client";
 
-import React from "react";
-import { motion } from "framer-motion";
-import AudioVisualizer from "./AudioVisualizer";
-import ClockWidget from "./ClockWidget";
-import WeatherWidget from "./WeatherWidget";
-
+import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { 
+  Bell, 
+  RefreshCw, 
+  CheckSquare, 
+  Wallet, 
+  X, 
+  Mic, 
+  MicOff,
+  Radio,
+  Lock,
+  Sparkles
+} from "lucide-react";
+import InteractiveSphere from "./InteractiveSphere";
+import { ShaderCanvas } from "@/components/ui/phosphor-30";
+import TranscriptDisplay from "./TranscriptDisplay";
 import ActionQueue from "./ActionQueue";
 import FinancialLedger from "./FinancialLedger";
-import { useVoiceAssistant } from "@/hooks/useVoiceAssistant";
+import ClockWidget from "./ClockWidget";
+import WeatherWidget from "./WeatherWidget";
+import { useVoiceAssistant, VoiceAssistantStatus } from "@/hooks/useVoiceAssistant";
 import { useRealtimeDashboard } from "@/hooks/useRealtimeDashboard";
 import { getBackendBaseUrl } from "@/lib/backend";
 
@@ -29,27 +42,43 @@ interface HUDLayoutProps {
 }
 
 export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps) {
-  const { 
-    status, 
-    error, 
+  const {
+    status,
+    error,
     amplitude,
     activeModel,
     connect,
     analyserRef,
-    playbackAnalyserRef
+    playbackAnalyserRef,
+    lastTranscript,
+    partialTranscript,
   } = useVoiceAssistant(sessionToken, onAuthError);
-  const { actionQueue, financialLedger } = useRealtimeDashboard(sessionToken, onAuthError);
-  const [isSubscribed, setIsSubscribed] = React.useState(false);
 
-  React.useEffect(() => {
+  const { actionQueue, financialLedger } = useRealtimeDashboard(sessionToken, onAuthError);
+  const [isSubscribed, setIsSubscribed] = useState(false);
+  const [activeDrawer, setActiveDrawer] = useState<"agenda" | "finances" | null>(null);
+  const [visualizerMode, setVisualizerMode] = useState<"phosphor" | "sphere">("phosphor");
+
+  // Push notifications
+  useEffect(() => {
     if ("serviceWorker" in navigator && "PushManager" in window) {
       navigator.serviceWorker.register("/sw.js").then((reg) => {
-        console.log("Service Worker registered:", reg);
         reg.pushManager.getSubscription().then((sub) => {
           setIsSubscribed(!!sub);
         });
       });
     }
+  }, []);
+
+  // Keyboard shortcut: Esc to close drawer
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setActiveDrawer(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   const subscribeToPush = async () => {
@@ -62,7 +91,6 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
         ),
       });
 
-      // Send to backend
       const backendUrl = getBackendBaseUrl();
       const response = await fetch(`${backendUrl}/api/push/subscribe?token=${sessionToken}`, {
         method: "POST",
@@ -72,234 +100,304 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
 
       if (response.ok) {
         setIsSubscribed(true);
-        console.log("Subscribed to REVELIO notifications");
       }
     } catch (e) {
       console.error("Subscription failed", e);
     }
   };
 
-  const container = {
-    hidden: { opacity: 0 },
-    show: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.2,
-        delayChildren: 0.5,
-      },
-    },
-  };
-
-  const itemLeft = {
-    hidden: { x: -50, opacity: 0 },
-    show: { x: 0, opacity: 1, transition: { duration: 0.8, ease: "easeOut" } },
-  };
-
-  const itemRight = {
-    hidden: { x: 50, opacity: 0 },
-    show: { x: 0, opacity: 1, transition: { duration: 0.8, ease: "easeOut" } },
-  };
-
-  const itemCenter = {
-    hidden: { scale: 0.8, opacity: 0 },
-    show: { scale: 1, opacity: 1, transition: { duration: 1, ease: "easeOut" } },
-  };
-
-  const itemTop = {
-    hidden: { y: -30, opacity: 0 },
-    show: { y: 0, opacity: 1, transition: { duration: 0.8, ease: "easeOut" } },
-  };
-
-  const getStatusText = () => {
+  const getStatusBadge = () => {
     switch (status) {
-      case "connecting": return "CONNECTING...";
-      case "connected": return "STABLE";
-      case "recording": return "LISTENING";
-      case "thinking": return "THINKING...";
-      case "playing": return "SPEAKING";
-      case "error": return "LINK_ERROR";
-      default: return "OPERATIONAL";
+      case "recording":
+        return { label: "Listening", color: "bg-emerald-400 shadow-[0_0_12px_#34d399]" };
+      case "thinking":
+        return { label: "Synthesizing", color: "bg-amber-400 shadow-[0_0_12px_#fbbf24]" };
+      case "playing":
+        return { label: "Responding", color: "bg-cyan-300 shadow-[0_0_12px_#67e8f9]" };
+      case "connecting":
+        return { label: "Connecting", color: "bg-slate-400 animate-pulse" };
+      case "error":
+        return { label: "Link Offline", color: "bg-red-500 shadow-[0_0_12px_#ef4444]" };
+      default:
+        return { label: "Active", color: "bg-emerald-400/80" };
     }
   };
 
+  const statusBadge = getStatusBadge();
+  const pendingTasks = actionQueue.filter((t) => !t.completed).length;
+
+  const handleCenterpieceClick = () => {
+    if (status === "error" || status === "idle") {
+      connect();
+    }
+  };
+
+  const handleLock = () => {
+    localStorage.removeItem("severus_session");
+    onAuthError?.();
+  };
+
   return (
-    <motion.main 
-      className="relative w-full h-screen overflow-hidden bg-black flex flex-col"
-      variants={container}
-      initial="hidden"
-      animate="show"
-    >
-      {/* Status Header - Fixed at top */}
-      <motion.div 
-        variants={itemTop}
-        className="shrink-0 z-20 flex flex-col items-center py-6 px-4 border-b border-primary/10 bg-black/40 backdrop-blur-md"
-      >
-        <div className="relative flex flex-col items-center gap-2">
-          {/* Decorative Top Trace */}
-          <div className="absolute -top-4 w-64 h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
-          
-          <div className="flex items-center gap-4 md:gap-8">
-            <div className="hidden md:block w-16 h-px bg-primary/20" />
-            <div className="flex items-center gap-4">
-              <motion.div 
-                className={`w-2 h-2 ${
-                  status === 'error' ? 'bg-red-500 shadow-[0_0_12px_#ff0000]' : 
-                  status === 'thinking' ? 'bg-amber-400 shadow-[0_0_12px_#fbbf24]' :
-                  status === 'playing' ? 'bg-[#00ff41] shadow-[0_0_12px_#00ff41]' :
-                  'bg-[#00ff41] shadow-[0_0_12px_#00ff41]'
-                }`}
-                animate={{ opacity: [0.4, 1, 0.4] }}
-                transition={{ duration: 1.5, repeat: Infinity }}
-              />
-              <h2 className="font-mono text-xl md:text-2xl font-bold tracking-[0.2em] md:tracking-[0.5em] text-white uppercase glow-green">
-                HUD: <span className={
-                  status === 'error' ? 'text-red-500' : 
-                  status === 'thinking' ? 'text-amber-400' :
-                  status === 'playing' ? 'text-[#00ff41]' :
-                  'text-[#00ff41]'
-                }>{getStatusText()}</span>
-              </h2>
-
-              {/* Status Actions */}
-              <div className="flex items-center gap-2">
-                {status === "error" && (
-                  <button 
-                    onClick={() => connect()}
-                    className="px-4 py-1 border border-red-500/40 bg-red-500/10 text-red-500 text-xs font-mono hover:bg-red-500/20 transition-all animate-pulse"
-                  >
-                    [ RE-LINK SYSTEM ]
-                  </button>
-                )}
-
-                {/* Notification Toggle */}
-                {!isSubscribed && (
-                  <button 
-                    onClick={subscribeToPush}
-                    className="ml-4 p-2 rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-400 hover:bg-amber-400/20 transition-all animate-pulse"
-                    title="Enable 24/7 Context Engine"
-                  >
-                    <span className="text-xs font-mono mr-2 hidden md:inline">REVELIO_NOTIFY</span>
-                    🔔
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="hidden md:block w-16 h-px bg-primary/20" />
+    <div className="relative w-full h-screen h-[100dvh] overflow-hidden flex flex-col justify-between bg-[#06080c] select-none">
+      
+      {/* 1. Header Bar: Minimalist & Clean */}
+      <header className="shrink-0 z-20 flex items-center justify-between px-5 py-4 border-b border-white/[0.06] bg-[#06080c]/80 backdrop-blur-xl">
+        {/* Left: Identity, Model & Visualizer Switcher */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${statusBadge.color}`} />
+            <span className="text-sm font-semibold tracking-wide text-white">
+              Severus
+            </span>
           </div>
-          
-          <div className="text-[8px] md:text-[9px] text-primary/60 tracking-[0.5em] md:tracking-[1em] font-mono uppercase bg-black/40 px-4 py-1 border-x border-primary/20">
-            {status === "error"
-              ? error ?? "VOICE_LINK_ERROR"
-              : status === "recording"
-                ? "MIC_ACTIVE // UPLINK_HD"
-                : status === "thinking"
-                  ? "NEURAL_SYNAPSE_PROCESSING"
-                  : status === "playing"
-                    ? "AUDIO_DOWNLINK_ACTIVE"
-                    : "SECURE_ENCLAVE_ACTIVE"}
+          <span className="hidden sm:inline-block text-[10px] px-2 py-0.5 rounded-full font-mono bg-white/[0.04] text-white/50 border border-white/[0.08]">
+            {activeModel || "v4.5"}
+          </span>
+          <button
+            onClick={() => setVisualizerMode(visualizerMode === "phosphor" ? "sphere" : "phosphor")}
+            className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono tracking-wider bg-white/[0.04] text-white/60 border border-white/[0.08] hover:bg-white/[0.08] hover:text-white transition"
+            title="Switch between Phosphor Fractal and Organic Sphere"
+          >
+            <Sparkles className="w-2.5 h-2.5 text-amber-400" />
+            <span>{visualizerMode === "phosphor" ? "PHOSPHOR" : "SPHERE"}</span>
+          </button>
+        </div>
+
+        {/* Center: State Pill */}
+        <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.03] border border-white/[0.06] text-xs font-sans text-white/70">
+          <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
+          <span className="tracking-wide">{statusBadge.label}</span>
+        </div>
+
+        {/* Right: Ambient Indicators & Actions */}
+        <div className="flex items-center gap-4">
+          <div className="hidden md:flex items-center gap-4">
+            <WeatherWidget />
+            <div className="h-4 w-px bg-white/10" />
+            <ClockWidget />
+          </div>
+
+          <div className="flex items-center gap-2">
+            {status === "error" && (
+              <button
+                onClick={() => connect()}
+                className="p-1.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/30 hover:bg-red-500/25 transition"
+                title="Reconnect Audio Link"
+              >
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              </button>
+            )}
+
+            {!isSubscribed && (
+              <button
+                onClick={subscribeToPush}
+                className="p-1.5 rounded-full bg-white/5 text-amber-400/80 border border-white/10 hover:bg-white/10 transition"
+                title="Enable Push Notifications"
+              >
+                <Bell className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            <button
+              onClick={handleLock}
+              className="p-1.5 rounded-full bg-white/5 text-white/40 border border-white/10 hover:bg-white/10 hover:text-white/80 transition"
+              title="Lock Terminal"
+            >
+              <Lock className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
-      </motion.div>
+      </header>
 
-      {/* Main Content Area - Scrollable on mobile, Fixed on desktop */}
-      <div className="flex-grow relative overflow-y-auto md:overflow-hidden p-4 md:p-8 flex flex-col md:block">
-        
-        {/* Desktop Layout - Absolute positioned corners */}
-        <div className="hidden md:block w-full h-full relative perspective-[2000px]">
-          <motion.div 
-            variants={itemLeft} 
-            className="absolute top-0 left-0 origin-top-left"
-            style={{ rotateY: 10, rotateX: -5 }}
-          >
-            <ClockWidget />
-          </motion.div>
-          
-          <motion.div 
-            variants={itemRight} 
-            className="absolute top-0 right-0 origin-top-right text-right"
-            style={{ rotateY: -10, rotateX: -5 }}
-          >
-            <WeatherWidget />
-          </motion.div>
-
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-12">
-            <motion.div variants={itemCenter}>
-              <AudioVisualizer 
-                voiceStatus={status} 
+      {/* 2. Main Stage: Centerpiece Visualizer & Live Captions */}
+      <main className="flex-grow relative flex flex-col items-center justify-center p-4 min-h-0">
+        <div className="relative flex items-center justify-center">
+          <div className="relative w-[280px] h-[280px] sm:w-[340px] sm:h-[340px] md:w-[420px] md:h-[420px] rounded-full overflow-hidden border border-white/10 shadow-[0_0_70px_rgba(0,0,0,0.85)] cursor-pointer group transition-all duration-500 hover:scale-[1.02] active:scale-[0.98]">
+            {visualizerMode === "phosphor" ? (
+              <ShaderCanvas
+                speedMultiplier={
+                  status === "thinking"
+                    ? 2.4
+                    : status === "playing"
+                    ? 1.5
+                    : status === "recording"
+                    ? 1.1
+                    : 0.8
+                }
+                onClick={handleCenterpieceClick}
+                className="w-full h-full"
+              />
+            ) : (
+              <InteractiveSphere
+                voiceStatus={status}
                 amplitude={amplitude}
-                activeModel={activeModel}
                 analyserRef={analyserRef}
                 playbackAnalyserRef={playbackAnalyserRef}
+                onSphereClick={handleCenterpieceClick}
+                className="w-full h-full"
               />
-            </motion.div>
-            
-            <motion.div variants={itemCenter} className="text-center">
-              <div className="flex gap-4 mb-2 justify-center">
-                <div className="w-8 h-px bg-primary/40" />
-                <div className="w-2 h-2 border border-primary/60 rotate-45" />
-                <div className="w-8 h-px bg-primary/40" />
-              </div>
-              <span className="text-[14px] font-mono tracking-[0.5em] text-white/40 uppercase whitespace-nowrap">
-                SEVERUS // CORE_SYSTEM_V4.0_S
-              </span>
-            </motion.div>
-          </div>
+            )}
 
-          <motion.div 
-            variants={itemLeft} 
-            className="absolute bottom-0 left-0 origin-bottom-left"
-            style={{ rotateY: 10, rotateX: 5 }}
-          >
-            <ActionQueue data={actionQueue} />
-          </motion.div>
-          
-          <motion.div 
-            variants={itemRight} 
-            className="absolute bottom-0 right-0 origin-bottom-right"
-            style={{ rotateY: -10, rotateX: 5 }}
-          >
-            <FinancialLedger data={financialLedger} />
-          </motion.div>
+            {/* Ambient Glass Rim & Inner Radial Vignette */}
+            <div className="absolute inset-0 rounded-full pointer-events-none border border-white/15 shadow-[inset_0_0_30px_rgba(0,0,0,0.7)] group-hover:border-white/25 transition-colors duration-300" />
+          </div>
         </div>
 
-        {/* Mobile Layout - Vertical Stack */}
-        <div className="md:hidden flex flex-col gap-8 w-full pb-12">
-          <div className="grid grid-cols-2 gap-4">
-            <motion.div variants={itemLeft} className="p-2 border border-primary/10 bg-primary/5">
-              <ClockWidget />
-            </motion.div>
-            <motion.div variants={itemRight} className="p-2 border border-primary/10 bg-primary/5 text-right">
-              <WeatherWidget />
-            </motion.div>
-          </div>
+        {/* Live Streaming Captions / Transcripts */}
+        <div className="mt-4 sm:mt-6 w-full max-w-xl z-10">
+          <TranscriptDisplay
+            text={lastTranscript}
+            partialText={partialTranscript}
+            status={status}
+          />
+        </div>
+      </main>
 
-          <motion.div variants={itemCenter} className="py-8 flex flex-col items-center gap-6">
-            <AudioVisualizer 
-              voiceStatus={status} 
-              amplitude={amplitude}
-              activeModel={activeModel}
-              analyserRef={analyserRef}
-              playbackAnalyserRef={playbackAnalyserRef}
+      {/* 3. Floating Bottom Dock */}
+      <footer className="shrink-0 z-20 pb-6 pt-2 px-4 flex justify-center">
+        <div className="flex items-center gap-2 p-1.5 rounded-full bg-[#0d131a]/80 backdrop-blur-xl border border-white/10 shadow-2xl">
+          {/* Agenda Button */}
+          <button
+            onClick={() => setActiveDrawer(activeDrawer === "agenda" ? null : "agenda")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium transition-all ${
+              activeDrawer === "agenda"
+                ? "bg-white/15 text-white shadow-sm"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            <CheckSquare className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Agenda</span>
+            {pendingTasks > 0 && (
+              <span className="w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] flex items-center justify-center font-mono">
+                {pendingTasks}
+              </span>
+            )}
+          </button>
+
+          <div className="w-px h-4 bg-white/10" />
+
+          {/* Finances Button */}
+          <button
+            onClick={() => setActiveDrawer(activeDrawer === "finances" ? null : "finances")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium transition-all ${
+              activeDrawer === "finances"
+                ? "bg-white/15 text-white shadow-sm"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            <Wallet className="w-3.5 h-3.5 text-amber-400" />
+            <span>Finances</span>
+          </button>
+
+          {/* Quick Voice Indicator */}
+          <div className="hidden sm:flex items-center pl-2 pr-3 py-1 text-[11px] text-white/30 font-mono">
+            {status === "recording" ? (
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <Mic className="w-3 h-3" /> Live
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <MicOff className="w-3 h-3 opacity-40" /> Standby
+              </span>
+            )}
+          </div>
+        </div>
+      </footer>
+
+      {/* 4. Contextual Intelligence Slide-over Drawer / Bottom Sheet */}
+      <AnimatePresence>
+        {activeDrawer && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setActiveDrawer(null)}
+              className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm"
             />
-            <div className="text-center">
-               <span className="text-[10px] font-mono tracking-[0.3em] text-white/40 uppercase whitespace-nowrap">
-                SEVERUS // CORE_SYSTEM_V4.0_S
-              </span>
-            </div>
-          </motion.div>
 
-          <motion.div variants={itemLeft} className="w-full">
-            <ActionQueue data={actionQueue} />
-          </motion.div>
+            {/* Desktop Slide-over Panel (Right) */}
+            <motion.div
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", damping: 28, stiffness: 280 }}
+              className="hidden md:flex fixed top-0 right-0 bottom-0 z-40 w-96 bg-[#0c1219]/95 backdrop-blur-2xl border-l border-white/10 flex-col shadow-2xl p-6"
+            >
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between pb-4 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  {activeDrawer === "agenda" ? (
+                    <CheckSquare className="w-4 h-4 text-emerald-400" />
+                  ) : (
+                    <Wallet className="w-4 h-4 text-amber-400" />
+                  )}
+                  <h3 className="text-sm font-semibold text-white tracking-wide capitalize">
+                    {activeDrawer === "agenda" ? "Action Agenda" : "Financial Ledger"}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setActiveDrawer(null)}
+                  className="p-1 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
-          <motion.div variants={itemRight} className="w-full">
-            <FinancialLedger data={financialLedger} />
-          </motion.div>
-        </div>
-      </div>
+              {/* Drawer Content */}
+              <div className="flex-grow pt-4 overflow-hidden">
+                {activeDrawer === "agenda" ? (
+                  <ActionQueue data={actionQueue} />
+                ) : (
+                  <FinancialLedger data={financialLedger} />
+                )}
+              </div>
+            </motion.div>
 
-      {/* HUD Background Scanlines / Glass Overlay */}
-      <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.4)_100%)]" />
-    </motion.main>
+            {/* Mobile Bottom Sheet (PWA) */}
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 28, stiffness: 280 }}
+              className="md:hidden fixed bottom-0 left-0 right-0 z-40 max-h-[82vh] bg-[#0c1219]/95 backdrop-blur-2xl border-t border-white/10 rounded-t-2xl flex flex-col shadow-2xl p-5"
+            >
+              {/* Swipe Handle */}
+              <div className="w-12 h-1 rounded-full bg-white/20 mx-auto mb-4" />
+
+              {/* Mobile Drawer Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  {activeDrawer === "agenda" ? (
+                    <CheckSquare className="w-4 h-4 text-emerald-400" />
+                  ) : (
+                    <Wallet className="w-4 h-4 text-amber-400" />
+                  )}
+                  <h3 className="text-sm font-semibold text-white tracking-wide capitalize">
+                    {activeDrawer === "agenda" ? "Action Agenda" : "Financial Ledger"}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setActiveDrawer(null)}
+                  className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Mobile Drawer Content */}
+              <div className="flex-grow pt-4 overflow-y-auto max-h-[60vh]">
+                {activeDrawer === "agenda" ? (
+                  <ActionQueue data={actionQueue} />
+                ) : (
+                  <FinancialLedger data={financialLedger} />
+                )}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

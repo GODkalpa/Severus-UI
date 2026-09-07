@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Fingerprint, Lock, ShieldCheck } from "lucide-react";
+import { Fingerprint, Lock, ShieldCheck, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { bufferToBase64, recursiveBase64ToBuffer } from "@/lib/webauthn";
 import { getBackendBaseUrl } from "@/lib/backend";
@@ -13,7 +13,7 @@ interface BiometricLockProps {
 
 export default function BiometricLock({ onSuccess }: BiometricLockProps) {
   const [isScanning, setIsScanning] = useState(false);
-  const [status, setStatus] = useState("INITIALIZING SECURITY...");
+  const [status, setStatus] = useState("Initializing Security Enclave...");
   const [mode, setMode] = useState<"LOGIN" | "REGISTER" | "CHECKING">("CHECKING");
   const [masterSecret, setMasterSecret] = useState("");
 
@@ -28,21 +28,21 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
       const res = await fetch(`${backendUrl}/api/auth/login/begin`);
       if (res.ok) {
         setMode("LOGIN");
-        setStatus("READY TO REVEAL");
+        setStatus("Ready for Biometric Authentication");
       } else {
         setMode("REGISTER");
-        setStatus("NO KEY DETECTED - MASTER SECRET REQUIRED");
+        setStatus("New Device • Master Secret Required");
       }
     } catch (err) {
       console.error("Backend unavailable", err);
-      setStatus("METEOROLOGICAL_SENSORS_OFFLINE");
+      setStatus("Backend Gateway Offline");
     }
   };
 
   const handleAuth = async () => {
     if (isScanning) return;
     setIsScanning(true);
-    
+
     try {
       if (mode === "LOGIN") {
         await login();
@@ -51,51 +51,53 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
       }
     } catch (err: any) {
       console.error(err);
-      // Specific check for WebAuthn cancellation or missing key
       if (err.name === "NotAllowedError" || err.name === "NotFoundError") {
         setMode("REGISTER");
-        setStatus("UPLINK_REQUIRED_FOR_THIS_DEVICE");
+        setStatus("Passkey registration required for this device");
       } else {
-        setStatus(`ERROR: ${err.message || "HANDSHAKE_FAILED"}`);
+        setStatus(err.message || "Authentication Failed");
       }
       setIsScanning(false);
     }
   };
 
   const login = async () => {
-    setStatus("GENERATING_CHALLENGE...");
+    setStatus("Generating Security Challenge...");
     const beginRes = await fetch(`${backendUrl}/api/auth/login/begin`);
     if (!beginRes.ok) {
       const err = await beginRes.json();
-      // If the backend says no credentials or we have a handshake failure, 
-      // it's likely a new device.
       setMode("REGISTER");
-      setStatus("NEW_DEVICE_DETECTED_-_UPLINK_REQUIRED");
+      setStatus("Device Unrecognized • Setup Required");
       throw new Error(err.detail || "Authentication Challenge Failed");
     }
 
     const { options, challengeId } = await beginRes.json();
-    
-    setStatus("CHECK_FINGERPRINT_OR_PASSKEY...");
+
+    setStatus("Touch Sensor or Enter Passkey...");
     const publicKey = recursiveBase64ToBuffer(options.publicKey);
     const credential: any = await navigator.credentials.get({ publicKey });
 
-    setStatus("VERIFYING_SIGNATURE...");
-    const completeRes = await fetch(`${backendUrl}/api/auth/login/complete?challenge_id=${challengeId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: credential.id,
-        rawId: bufferToBase64(credential.rawId),
-        type: credential.type,
-        response: {
-          authenticatorData: bufferToBase64(credential.response.authenticatorData),
-          clientDataJSON: bufferToBase64(credential.response.clientDataJSON),
-          signature: bufferToBase64(credential.response.signature),
-          userHandle: credential.response.userHandle ? bufferToBase64(credential.response.userHandle) : null,
-        },
-      }),
-    });
+    setStatus("Verifying Enclave Signature...");
+    const completeRes = await fetch(
+      `${backendUrl}/api/auth/login/complete?challenge_id=${challengeId}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: credential.id,
+          rawId: bufferToBase64(credential.rawId),
+          type: credential.type,
+          response: {
+            authenticatorData: bufferToBase64(credential.response.authenticatorData),
+            clientDataJSON: bufferToBase64(credential.response.clientDataJSON),
+            signature: bufferToBase64(credential.response.signature),
+            userHandle: credential.response.userHandle
+              ? bufferToBase64(credential.response.userHandle)
+              : null,
+          },
+        }),
+      }
+    );
 
     const result = await completeRes.json();
     if (!completeRes.ok) {
@@ -103,26 +105,24 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     }
 
     if (result.status === "success") {
-      setStatus("ACCESS GRANTED");
+      setStatus("Access Granted");
       localStorage.setItem("severus_session", result.sessionToken);
-      setTimeout(() => onSuccess(result.sessionToken), 500);
+      setTimeout(() => onSuccess(result.sessionToken), 400);
     } else {
-      // If verification fails, it might be a mismatched device
       setMode("REGISTER");
-      setStatus("IDENTITY_MISMATCH_-_RE_UPLINK");
+      setStatus("Identity Mismatch • Re-register");
       throw new Error(result.detail || "Authentication Failed");
     }
   };
 
   const register = async () => {
     if (!masterSecret) {
-      setStatus("MASTER SECRET REQUIRED");
+      setStatus("Master Secret Required");
       setIsScanning(false);
       return;
     }
 
-    setStatus("CLAIMING_OWNERSHIP...");
-    // Use a fixed userId on the client side too for a cleaner "one owner, many keys" model
+    setStatus("Authorizing Hardware Key...");
     const userId = "severus-owner-fixed";
     const beginRes = await fetch(`${backendUrl}/api/auth/register/begin`, {
       method: "POST",
@@ -132,34 +132,35 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
         master_secret: masterSecret,
       }),
     });
-    
+
     if (!beginRes.ok) {
       const err = await beginRes.json();
       throw new Error(err.detail || "Registration Challenge Failed");
     }
 
     const { options, challengeId } = await beginRes.json();
-    
-    setStatus("CREATING_SECURE_ENCLAVE...");
-    // Update status to be more descriptive about Fingerprint/Passkey on mobile
-    setStatus("CHECK_FINGERPRINT_OR_PASSKEY...");
+
+    setStatus("Register Passkey on this device...");
     const publicKey = recursiveBase64ToBuffer(options.publicKey);
     const credential: any = await navigator.credentials.create({ publicKey });
 
-    setStatus("FINALIZING_KEY...");
-    const completeRes = await fetch(`${backendUrl}/api/auth/register/complete?challenge_id=${challengeId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: credential.id,
-        rawId: bufferToBase64(credential.rawId),
-        type: credential.type,
-        response: {
-          attestationObject: bufferToBase64(credential.response.attestationObject),
-          clientDataJSON: bufferToBase64(credential.response.clientDataJSON),
-        },
-      }),
-    });
+    setStatus("Finalizing Enclave Anchor...");
+    const completeRes = await fetch(
+      `${backendUrl}/api/auth/register/complete?challenge_id=${challengeId}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: credential.id,
+          rawId: bufferToBase64(credential.rawId),
+          type: credential.type,
+          response: {
+            attestationObject: bufferToBase64(credential.response.attestationObject),
+            clientDataJSON: bufferToBase64(credential.response.clientDataJSON),
+          },
+        }),
+      }
+    );
 
     const result = await completeRes.json();
     if (!completeRes.ok) {
@@ -167,144 +168,120 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     }
 
     if (result.status === "success") {
-      setStatus("KEY REGISTERED");
+      setStatus("Key Registered Successfully");
       setMode("LOGIN");
       setIsScanning(false);
-      // Automatically attempt login after registration
-      setTimeout(handleAuth, 1000);
+      setTimeout(handleAuth, 800);
     } else {
       throw new Error("Registration Verification Failed");
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md select-none">
-      <div className="flex flex-col items-center max-w-lg w-full px-4 text-center">
-        {/* Biometric Core */}
-        <motion.div 
-          className="relative group cursor-pointer mb-12"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#06080c] select-none px-4">
+      {/* Background Ambient Glow */}
+      <div className="absolute w-96 h-96 rounded-full bg-emerald-500/10 blur-[120px] pointer-events-none" />
+
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 0.5, ease: "easeOut" }}
+        className="relative z-10 w-full max-w-sm flex flex-col items-center p-8 rounded-2xl bg-[#0c1219]/80 backdrop-blur-2xl border border-white/10 shadow-2xl text-center"
+      >
+        {/* Biometric Interactive Emblem */}
+        <div
           onClick={handleAuth}
-          initial={{ scale: 0.9, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.8, ease: "easeOut" }}
+          className="relative group cursor-pointer w-28 h-28 mb-6 rounded-full flex items-center justify-center bg-white/[0.03] border border-white/10 hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-all duration-500"
         >
-          {/* Visual Anchor Brackets */}
-          <div className="absolute -top-8 -left-8 w-6 h-6 border-t-2 border-l-2 border-primary/40" />
-          <div className="absolute -top-8 -right-8 w-6 h-6 border-t-2 border-r-2 border-primary/40" />
-          <div className="absolute -bottom-8 -left-8 w-6 h-6 border-b-2 border-l-2 border-primary/40" />
-          <div className="absolute -bottom-8 -right-8 w-6 h-6 border-b-2 border-r-2 border-primary/40" />
-          
-          {/* Icon Container */}
-          <div className="relative p-8 overflow-hidden rounded-none">
-            {mode === "REGISTER" ? (
-              <ShieldCheck size={160} className={cn("text-yellow-400 glow-yellow", isScanning && "animate-pulse")} />
-            ) : (
-              <Fingerprint 
-                size={160} 
-                className={cn(
-                  "text-primary transition-all duration-1000",
-                  isScanning ? "opacity-30 blur-[2px]" : "glow-lg"
-                )} 
-              />
-            )}
-            
-            {/* Active Scan Line */}
-            <AnimatePresence>
-              {isScanning && (
-                <motion.div 
-                  className="absolute top-0 left-0 w-full h-[2px] bg-primary shadow-[0_0_15px_#00f0ff]"
-                  initial={{ top: "0%" }}
-                  animate={{ top: "100%" }}
-                  exit={{ opacity: 0 }}
-                  transition={{ 
-                    repeat: Infinity, 
-                    duration: 1.5, 
-                    ease: "linear" 
-                  }}
-                />
+          {/* Subtle Ambient Pulse Ring */}
+          <div className="absolute inset-0 rounded-full border border-emerald-500/20 animate-ping opacity-25" />
+
+          {mode === "REGISTER" ? (
+            <ShieldCheck className="w-12 h-12 text-amber-400/90" />
+          ) : (
+            <Fingerprint
+              className={cn(
+                "w-12 h-12 text-emerald-400 transition-all duration-300",
+                isScanning ? "animate-pulse scale-110 text-emerald-300" : "group-hover:scale-105"
               )}
-            </AnimatePresence>
-          </div>
-        </motion.div>
-
-        {/* Interaction Group */}
-        <div className="space-y-6 w-full max-w-sm">
-          <div className="flex items-center justify-center gap-3">
-            <motion.span 
-              className="w-2 h-2 bg-primary"
-              animate={{ opacity: [0, 1, 0] }}
-              transition={{ repeat: Infinity, duration: 1.5 }}
             />
-            <h1 className="font-mono text-white text-lg tracking-[0.2em] uppercase font-bold glow-cyan">
-              {status}
-            </h1>
-          </div>
+          )}
+        </div>
 
-          <AnimatePresence>
-            {mode === "REGISTER" && !isScanning && (
-              <motion.div 
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="space-y-4"
-              >
-                <input 
+        {/* Title & Status */}
+        <h2 className="text-lg font-semibold tracking-wide text-white mb-1 font-sans">
+          {mode === "REGISTER" ? "Device Setup" : "Severus Access"}
+        </h2>
+        <p className="text-xs text-white/50 tracking-normal font-sans mb-6 min-h-[1.5rem]">
+          {status}
+        </p>
+
+        {/* Master Secret Input (Registration mode only) */}
+        <AnimatePresence>
+          {mode === "REGISTER" && !isScanning && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="w-full mb-4"
+            >
+              <div className="relative">
+                <input
                   type="password"
-                  placeholder="ENTER_MASTER_SECRET"
+                  placeholder="Master Secret"
                   value={masterSecret}
                   onChange={(e) => setMasterSecret(e.target.value)}
-                  className="w-full bg-black/40 border border-primary/20 p-3 font-mono text-primary text-center text-sm focus:outline-none focus:border-primary/60 transition-colors uppercase tracking-widest placeholder:opacity-30"
+                  className="w-full px-4 py-2.5 rounded-xl bg-black/40 border border-white/15 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-emerald-500/60 transition"
                 />
-                <p className="font-mono text-[10px] text-yellow-400/60 uppercase">
-                  First-time setup: Claim ownership using your secret
-                </p>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                <KeyRound className="absolute right-3.5 top-3 w-4 h-4 text-white/30" />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-          <div className="flex flex-col items-center gap-6 mt-8">
-            <button 
-              className={cn(
-                "px-12 py-4 border border-primary/40 text-primary text-sm tracking-[0.3em] font-bold transition-all duration-300 uppercase relative overflow-hidden group",
-                isScanning ? "opacity-50 cursor-not-allowed" : "hover:bg-primary/10"
-              )}
-              onClick={handleAuth}
-              disabled={isScanning}
+        {/* Action Button */}
+        <button
+          onClick={handleAuth}
+          disabled={isScanning}
+          className={cn(
+            "w-full py-3 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all duration-300 shadow-lg",
+            isScanning
+              ? "bg-white/10 text-white/40 cursor-not-allowed"
+              : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 active:scale-[0.98]"
+          )}
+        >
+          {isScanning
+            ? "Verifying Enclave..."
+            : mode === "REGISTER"
+            ? "Register Device"
+            : "Authenticate Passkey"}
+        </button>
+
+        {/* Switch Mode Toggle */}
+        <div className="mt-4 flex items-center justify-center gap-4 text-[11px] text-white/40">
+          {mode === "LOGIN" ? (
+            <button
+              onClick={() => {
+                setMode("REGISTER");
+                setStatus("Enter Master Secret to add this device");
+              }}
+              className="hover:text-white/80 transition underline decoration-white/20 underline-offset-4"
             >
-              <span className="relative z-10">
-                {isScanning ? "AUTHENTICATING..." : mode === "REGISTER" ? "REVELIO_INIT" : "REVELIO"}
-              </span>
+              Register New Device
             </button>
-            
-            {mode === "LOGIN" && (
-              <button 
-                onClick={() => {
-                  setMode("REGISTER");
-                  setStatus("UPLINK_NEW_HARDWARE");
-                }}
-                className="font-mono text-[10px] text-primary/40 hover:text-primary transition-colors uppercase tracking-[0.2em]"
-              >
-                [ REGISTER_NEW_DEVICE ]
-              </button>
-            )}
-
-            {mode === "REGISTER" && (
-              <button 
-                onClick={() => {
-                  setMode("LOGIN");
-                  setStatus("READY_TO_REVEAL");
-                }}
-                className="font-mono text-[10px] text-yellow-400/40 hover:text-yellow-400 transition-colors uppercase tracking-[0.2em]"
-              >
-                [ RETURN_TO_LOGIN ]
-              </button>
-            )}
-            
-            <p className="font-mono text-on-surface-variant/40 text-[8px] tracking-[0.4em] uppercase">
-              Secure Hardware Handshake V4.2
-            </p>
-          </div>
+          ) : (
+            <button
+              onClick={() => {
+                setMode("LOGIN");
+                setStatus("Ready for Biometric Authentication");
+              }}
+              className="hover:text-white/80 transition underline decoration-white/20 underline-offset-4"
+            >
+              Return to Login
+            </button>
+          )}
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
