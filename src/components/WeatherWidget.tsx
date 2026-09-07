@@ -7,17 +7,17 @@ interface WeatherData {
   temperature: number;
   windspeed: number;
   weathercode: number;
+  locationLabel: string;
 }
 
 export default function WeatherWidget() {
   const [data, setData] = useState<WeatherData | null>(null);
 
   useEffect(() => {
-    async function fetchWeather() {
+    async function fetchWeather(lat: number = 26.8126, lon: number = 87.2834, locTag: string = "DHN_NP") {
       try {
-        // Fixed coordinates for Kathmandu (GMT +05:45)
         const res = await fetch(
-          "https://api.open-meteo.com/v1/forecast?latitude=27.700769&longitude=85.300140&current_weather=true"
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`
         );
         const json = await res.json();
         const current = json.current_weather;
@@ -25,14 +25,32 @@ export default function WeatherWidget() {
           temperature: current.temperature,
           windspeed: current.windspeed,
           weathercode: current.weathercode,
+          locationLabel: locTag,
         });
       } catch (err) {
         console.warn("Weather fetch failed", err);
       }
     }
 
-    void fetchWeather();
-    const interval = setInterval(fetchWeather, 1800000); // 30m
+    const initLocationAndWeather = () => {
+      if (typeof navigator !== "undefined" && "geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            void fetchWeather(pos.coords.latitude, pos.coords.longitude, "GEO_LOC");
+          },
+          () => {
+            // Default to Dharan, Nepal (UTC+5:45)
+            void fetchWeather(26.8126, 87.2834, "DHN_NP");
+          },
+          { timeout: 5000 }
+        );
+      } else {
+        void fetchWeather(26.8126, 87.2834, "DHN_NP");
+      }
+    };
+
+    initLocationAndWeather();
+    const interval = setInterval(initLocationAndWeather, 1800000); // 30m
     return () => clearInterval(interval);
   }, []);
 
@@ -70,7 +88,7 @@ export default function WeatherWidget() {
                 WIND: {data.windspeed} km/h
               </div>
               <div className="text-[9px] uppercase tracking-tighter">
-                LOC: KTM_NP
+                LOC: {data.locationLabel}
               </div>
             </div>
           </motion.div>

@@ -5,12 +5,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Fingerprint, Lock, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { bufferToBase64, recursiveBase64ToBuffer } from "@/lib/webauthn";
+import { getBackendBaseUrl } from "@/lib/backend";
 
 interface BiometricLockProps {
   onSuccess: (token: string) => void;
 }
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8001";
 
 export default function BiometricLock({ onSuccess }: BiometricLockProps) {
   const [isScanning, setIsScanning] = useState(false);
@@ -18,13 +17,15 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
   const [mode, setMode] = useState<"LOGIN" | "REGISTER" | "CHECKING">("CHECKING");
   const [masterSecret, setMasterSecret] = useState("");
 
+  const backendUrl = getBackendBaseUrl() || "http://localhost:8000";
+
   useEffect(() => {
     checkAvailability();
   }, []);
 
   const checkAvailability = async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/auth/login/begin`);
+      const res = await fetch(`${backendUrl}/api/auth/login/begin`);
       if (res.ok) {
         setMode("LOGIN");
         setStatus("READY TO REVEAL");
@@ -63,7 +64,7 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
 
   const login = async () => {
     setStatus("GENERATING_CHALLENGE...");
-    const beginRes = await fetch(`${BACKEND_URL}/api/auth/login/begin`);
+    const beginRes = await fetch(`${backendUrl}/api/auth/login/begin`);
     if (!beginRes.ok) {
       const err = await beginRes.json();
       // If the backend says no credentials or we have a handshake failure, 
@@ -80,7 +81,7 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     const credential: any = await navigator.credentials.get({ publicKey });
 
     setStatus("VERIFYING_SIGNATURE...");
-    const completeRes = await fetch(`${BACKEND_URL}/api/auth/login/complete?challenge_id=${challengeId}`, {
+    const completeRes = await fetch(`${backendUrl}/api/auth/login/complete?challenge_id=${challengeId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -123,7 +124,7 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     setStatus("CLAIMING_OWNERSHIP...");
     // Use a fixed userId on the client side too for a cleaner "one owner, many keys" model
     const userId = "severus-owner-fixed";
-    const beginRes = await fetch(`${BACKEND_URL}/api/auth/register/begin`, {
+    const beginRes = await fetch(`${backendUrl}/api/auth/register/begin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -146,7 +147,7 @@ export default function BiometricLock({ onSuccess }: BiometricLockProps) {
     const credential: any = await navigator.credentials.create({ publicKey });
 
     setStatus("FINALIZING_KEY...");
-    const completeRes = await fetch(`${BACKEND_URL}/api/auth/register/complete?challenge_id=${challengeId}`, {
+    const completeRes = await fetch(`${backendUrl}/api/auth/register/complete?challenge_id=${challengeId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

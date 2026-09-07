@@ -43,7 +43,7 @@ export const getBackendBaseUrl = () => {
 
   if (typeof window !== "undefined") {
     const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-    return `${protocol}//${window.location.hostname || "localhost"}:8001`;
+    return `${protocol}//${window.location.hostname || "localhost"}:8000`;
   }
 
   return "";
@@ -64,7 +64,7 @@ export const getVoiceBackendUrl = () => {
 
   if (typeof window !== "undefined") {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${window.location.hostname || "localhost"}:8001/ws/severus`;
+    return `${protocol}//${window.location.hostname || "localhost"}:8000/ws/severus`;
   }
 
   return "";

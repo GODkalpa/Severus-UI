@@ -433,6 +433,14 @@ export function useVoiceAssistant(sessionToken: string = "") {
 
       if (statusRef.current !== "error") {
         updateStatus("idle");
+        if (sessionToken) {
+          window.setTimeout(() => {
+            if (statusRef.current === "idle" && connectionIdRef.current === nextConnectionId) {
+              console.log("Attempting automatic reconnect to Severus voice stream...");
+              connect();
+            }
+          }, 4000);
+        }
       }
     };
   };
