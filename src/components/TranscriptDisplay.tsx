@@ -25,7 +25,7 @@ export default function TranscriptDisplay({ text, partialText, status }: Transcr
             transition={{ duration: 0.35, ease: "easeOut" }}
             className="flex flex-col items-center gap-1.5"
           >
-            <p className="text-base sm:text-lg md:text-xl font-normal text-white/90 leading-relaxed tracking-normal font-sans max-w-xl">
+            <p className="text-base sm:text-lg md:text-xl font-medium text-white drop-shadow-[0_2px_16px_rgba(0,0,0,0.95)] leading-relaxed tracking-normal font-sans max-w-xl">
               {activeText}
             </p>
             {partialText && (

@@ -209,38 +209,29 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
         </div>
       </header>
 
-      {/* 2. Main Stage: Un-trapped Free-Flowing Visualizer & Live Captions */}
-      <main className="flex-grow relative flex flex-col items-center justify-center p-4 min-h-0 overflow-hidden">
-        {/* Living Audio-Reactive Centerpiece (Free-flowing without clipping circle) */}
-        <motion.div
-          animate={{
-            scale: 1.0 + (status === "recording" || status === "playing" ? amplitude * 0.12 : 0),
-          }}
-          transition={{ type: "spring", stiffness: 320, damping: 25 }}
-          className="relative w-full max-w-2xl h-[320px] sm:h-[420px] md:h-[500px] flex items-center justify-center cursor-pointer select-none"
-          onClick={handleCenterpieceClick}
-        >
-          {visualizerMode === "phosphor" ? (
-            <ShaderCanvas
-              amplitude={amplitude}
-              voiceStatus={status}
-              speedMultiplier={
-                status === "thinking"
-                  ? 2.2
-                  : status === "playing"
-                  ? 1.5
-                  : status === "recording"
-                  ? 1.2
-                  : 0.8
-              }
-              className="w-full h-full"
-              style={{
-                maskImage: "radial-gradient(circle at center, black 50%, transparent 95%)",
-                WebkitMaskImage: "radial-gradient(circle at center, black 50%, transparent 95%)",
-              }}
-            />
-          ) : (
-            <div className="w-[280px] h-[280px] sm:w-[360px] sm:h-[360px] md:w-[440px] md:h-[440px]">
+      {/* 1. Full-Screen Free-Floating Living Shader Background / Core (Zero Box, Zero Seam) */}
+      <div 
+        className="fixed inset-0 z-0 pointer-events-auto"
+        onClick={handleCenterpieceClick}
+      >
+        {visualizerMode === "phosphor" ? (
+          <ShaderCanvas
+            amplitude={amplitude}
+            voiceStatus={status}
+            speedMultiplier={
+              status === "thinking"
+                ? 2.2
+                : status === "playing"
+                ? 1.5
+                : status === "recording"
+                ? 1.2
+                : 0.8
+            }
+            className="w-full h-full"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <div className="w-[300px] h-[300px] sm:w-[380px] sm:h-[380px] md:w-[460px] md:h-[460px]">
               <InteractiveSphere
                 voiceStatus={status}
                 amplitude={amplitude}
@@ -249,11 +240,13 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
                 className="w-full h-full"
               />
             </div>
-          )}
-        </motion.div>
+          </div>
+        )}
+      </div>
 
-        {/* Live Streaming Captions / Transcripts */}
-        <div className="mt-2 sm:mt-4 w-full max-w-xl z-10">
+      {/* 2. Main Stage: Floating Transcripts / Live Captions */}
+      <main className="relative flex-grow z-10 flex flex-col items-center justify-end pb-10 sm:pb-16 pointer-events-none">
+        <div className="w-full max-w-xl px-4 pointer-events-auto">
           <TranscriptDisplay
             text={lastTranscript}
             partialText={partialTranscript}
