@@ -18,8 +18,16 @@ export default function Home() {
   }, []);
 
   const handleAuthSuccess = (token: string) => {
+    localStorage.setItem("severus_session", token);
     setSessionToken(token);
     setIsAuthenticated(true);
+  };
+
+  const handleAuthError = () => {
+    console.warn("Session invalid or expired. Returning to biometric authentication.");
+    localStorage.removeItem("severus_session");
+    setSessionToken(null);
+    setIsAuthenticated(false);
   };
 
   return (
@@ -28,7 +36,7 @@ export default function Home() {
         {!isAuthenticated ? (
           <BiometricLock key="lock" onSuccess={handleAuthSuccess} />
         ) : (
-          <HUDLayout key="hud" sessionToken={sessionToken || ""} />
+          <HUDLayout key="hud" sessionToken={sessionToken || ""} onAuthError={handleAuthError} />
         )}
       </AnimatePresence>
     </main>

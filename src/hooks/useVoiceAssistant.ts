@@ -12,7 +12,7 @@ export type VoiceAssistantStatus =
   | "playing"
   | "error";
 
-export function useVoiceAssistant(sessionToken: string = "") {
+export function useVoiceAssistant(sessionToken: string = "", onAuthError?: () => void) {
   const [status, setStatus] = useState<VoiceAssistantStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastTranscript, setLastTranscript] = useState<string | null>(null);
@@ -395,9 +395,12 @@ export function useVoiceAssistant(sessionToken: string = "") {
               setActiveModel(metrics.model || activeModel);
             } else if (metrics.type === "ERROR") {
               console.error("Backend Error:", metrics.message, metrics.detail);
-              setError(metrics.message === "UNAUTHORIZED" 
-                ? "Authentication failed. Please log in again." 
-                : metrics.message);
+              if (metrics.message === "UNAUTHORIZED") {
+                setError("Authentication failed. Please log in again.");
+                onAuthError?.();
+              } else {
+                setError(metrics.message);
+              }
               updateStatus("error");
               socket.close();
             }

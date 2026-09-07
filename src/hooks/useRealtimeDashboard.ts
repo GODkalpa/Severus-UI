@@ -80,7 +80,7 @@ const mapFinancialEntry = (row: DbRow): DashboardFinancialEntry => ({
   loggedAt: asNullableString(row.logged_at),
 });
 
-export function useRealtimeDashboard(sessionToken: string = "") {
+export function useRealtimeDashboard(sessionToken: string = "", onAuthError?: () => void) {
   const [biometrics, setBiometrics] = useState<DashboardBiometric[]>([]);
   const [actionQueue, setActionQueue] = useState<DashboardActionItem[]>([]);
   const [financialLedger, setFinancialLedger] = useState<DashboardFinancialEntry[]>([]);
@@ -107,6 +107,9 @@ export function useRealtimeDashboard(sessionToken: string = "") {
         const response = await fetch(endpoint, { signal: abortController.signal });
 
         if (!response.ok) {
+          if (response.status === 401) {
+            onAuthError?.();
+          }
           throw new Error(`Dashboard request failed with status ${response.status}`);
         }
 

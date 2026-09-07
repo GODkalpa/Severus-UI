@@ -25,9 +25,10 @@ function urlBase64ToUint8Array(base64String: string) {
 
 interface HUDLayoutProps {
   sessionToken: string;
+  onAuthError?: () => void;
 }
 
-export default function HUDLayout({ sessionToken }: HUDLayoutProps) {
+export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps) {
   const { 
     status, 
     error, 
@@ -36,8 +37,8 @@ export default function HUDLayout({ sessionToken }: HUDLayoutProps) {
     connect,
     analyserRef,
     playbackAnalyserRef
-  } = useVoiceAssistant(sessionToken);
-  const { actionQueue, financialLedger } = useRealtimeDashboard(sessionToken);
+  } = useVoiceAssistant(sessionToken, onAuthError);
+  const { actionQueue, financialLedger } = useRealtimeDashboard(sessionToken, onAuthError);
   const [isSubscribed, setIsSubscribed] = React.useState(false);
 
   React.useEffect(() => {
