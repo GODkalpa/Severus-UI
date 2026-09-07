@@ -138,10 +138,10 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
   };
 
   return (
-    <div className="relative w-full h-screen h-[100dvh] overflow-hidden flex flex-col justify-between bg-[#06080c] select-none">
+    <div className="relative w-full h-screen h-[100dvh] overflow-hidden flex flex-col justify-between bg-black select-none">
       
-      {/* 1. Header Bar: Minimalist & Clean */}
-      <header className="shrink-0 z-20 flex items-center justify-between px-5 py-4 border-b border-white/[0.06] bg-[#06080c]/80 backdrop-blur-xl">
+      {/* 1. Header Bar: Borderless Minimalist & Clean */}
+      <header className="shrink-0 z-20 flex items-center justify-between px-5 py-4 border-b border-white/[0.04] bg-black/40 backdrop-blur-xl">
         {/* Left: Identity, Model & Visualizer Switcher */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
@@ -209,42 +209,51 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
         </div>
       </header>
 
-      {/* 2. Main Stage: Centerpiece Visualizer & Live Captions */}
-      <main className="flex-grow relative flex flex-col items-center justify-center p-4 min-h-0">
-        <div className="relative flex items-center justify-center">
-          <div className="relative w-[280px] h-[280px] sm:w-[340px] sm:h-[340px] md:w-[420px] md:h-[420px] rounded-full overflow-hidden border border-white/10 shadow-[0_0_70px_rgba(0,0,0,0.85)] cursor-pointer group transition-all duration-500 hover:scale-[1.02] active:scale-[0.98]">
-            {visualizerMode === "phosphor" ? (
-              <ShaderCanvas
-                speedMultiplier={
-                  status === "thinking"
-                    ? 2.4
-                    : status === "playing"
-                    ? 1.5
-                    : status === "recording"
-                    ? 1.1
-                    : 0.8
-                }
-                onClick={handleCenterpieceClick}
-                className="w-full h-full"
-              />
-            ) : (
+      {/* 2. Main Stage: Un-trapped Free-Flowing Visualizer & Live Captions */}
+      <main className="flex-grow relative flex flex-col items-center justify-center p-4 min-h-0 overflow-hidden">
+        {/* Living Audio-Reactive Centerpiece (Free-flowing without clipping circle) */}
+        <motion.div
+          animate={{
+            scale: 1.0 + (status === "recording" || status === "playing" ? amplitude * 0.12 : 0),
+          }}
+          transition={{ type: "spring", stiffness: 320, damping: 25 }}
+          className="relative w-full max-w-2xl h-[320px] sm:h-[420px] md:h-[500px] flex items-center justify-center cursor-pointer select-none"
+          onClick={handleCenterpieceClick}
+        >
+          {visualizerMode === "phosphor" ? (
+            <ShaderCanvas
+              amplitude={amplitude}
+              voiceStatus={status}
+              speedMultiplier={
+                status === "thinking"
+                  ? 2.2
+                  : status === "playing"
+                  ? 1.5
+                  : status === "recording"
+                  ? 1.2
+                  : 0.8
+              }
+              className="w-full h-full"
+              style={{
+                maskImage: "radial-gradient(circle at center, black 50%, transparent 95%)",
+                WebkitMaskImage: "radial-gradient(circle at center, black 50%, transparent 95%)",
+              }}
+            />
+          ) : (
+            <div className="w-[280px] h-[280px] sm:w-[360px] sm:h-[360px] md:w-[440px] md:h-[440px]">
               <InteractiveSphere
                 voiceStatus={status}
                 amplitude={amplitude}
                 analyserRef={analyserRef}
                 playbackAnalyserRef={playbackAnalyserRef}
-                onSphereClick={handleCenterpieceClick}
                 className="w-full h-full"
               />
-            )}
-
-            {/* Ambient Glass Rim & Inner Radial Vignette */}
-            <div className="absolute inset-0 rounded-full pointer-events-none border border-white/15 shadow-[inset_0_0_30px_rgba(0,0,0,0.7)] group-hover:border-white/25 transition-colors duration-300" />
-          </div>
-        </div>
+            </div>
+          )}
+        </motion.div>
 
         {/* Live Streaming Captions / Transcripts */}
-        <div className="mt-4 sm:mt-6 w-full max-w-xl z-10">
+        <div className="mt-2 sm:mt-4 w-full max-w-xl z-10">
           <TranscriptDisplay
             text={lastTranscript}
             partialText={partialTranscript}
@@ -255,7 +264,7 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
 
       {/* 3. Floating Bottom Dock */}
       <footer className="shrink-0 z-20 pb-6 pt-2 px-4 flex justify-center">
-        <div className="flex items-center gap-2 p-1.5 rounded-full bg-[#0d131a]/80 backdrop-blur-xl border border-white/10 shadow-2xl">
+        <div className="flex items-center gap-2 p-1.5 rounded-full bg-black/80 backdrop-blur-xl border border-white/10 shadow-2xl">
           {/* Agenda Button */}
           <button
             onClick={() => setActiveDrawer(activeDrawer === "agenda" ? null : "agenda")}
@@ -323,7 +332,7 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 28, stiffness: 280 }}
-              className="hidden md:flex fixed top-0 right-0 bottom-0 z-40 w-96 bg-[#0c1219]/95 backdrop-blur-2xl border-l border-white/10 flex-col shadow-2xl p-6"
+              className="hidden md:flex fixed top-0 right-0 bottom-0 z-40 w-96 bg-black/95 backdrop-blur-2xl border-l border-white/10 flex-col shadow-2xl p-6"
             >
               {/* Drawer Header */}
               <div className="flex items-center justify-between pb-4 border-b border-white/10">
@@ -361,7 +370,7 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 28, stiffness: 280 }}
-              className="md:hidden fixed bottom-0 left-0 right-0 z-40 max-h-[82vh] bg-[#0c1219]/95 backdrop-blur-2xl border-t border-white/10 rounded-t-2xl flex flex-col shadow-2xl p-5"
+              className="md:hidden fixed bottom-0 left-0 right-0 z-40 max-h-[82vh] bg-black/95 backdrop-blur-2xl border-t border-white/10 rounded-t-2xl flex flex-col shadow-2xl p-5"
             >
               {/* Swipe Handle */}
               <div className="w-12 h-1 rounded-full bg-white/20 mx-auto mb-4" />

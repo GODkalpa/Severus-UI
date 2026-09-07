@@ -12,6 +12,7 @@ uniform vec3  iResolution;   // (width, height, dpr)
 uniform float iTime;         // seconds
 uniform int   iFrame;        // frame counter
 uniform vec4  iMouse;        // (x, y, L, R)
+uniform float iAudio;        // Real-time audio amplitude [0, 1]
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
@@ -20,7 +21,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     vec3  FC = vec3(fragCoord, t);
     vec4  o  = vec4(0.0);
 
-    // ====== твой шейдер (1-в-1) ======
+    // Audio reactivity: expands radius and flares energy on voice activity
+    float amp = clamp(iAudio, 0.0, 1.0);
+    float radius = 3.0 + amp * 0.75;
+
     float s = 0.0;
     for (float i = 0.0, z = 0.0, d = 0.0; i++ < 8e1; o += (cos(s + vec4(0.0, 1.0, 8.0, 0.0)) + 1.0) / d)
     {
@@ -30,10 +34,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 
         a = a * dot(a, p) - cross(a, p);
         for (d = 1.0; d++ < 9.0; )
-            a -= sin(a * d + t).zxy / d;
+            a -= sin(a * d + t * (1.0 + amp * 0.4)).zxy / d;
 
-        z += d = 0.1 * abs(length(p) - 3.0) + 0.07 * abs(cos(s = a.y));
+        z += d = 0.1 * abs(length(p) - radius) + 0.07 * abs(cos(s = a.y));
     }
+    
+    // Flare flame intensity dynamically with voice speech
+    o *= (1.0 + amp * 1.6);
     o = tanh(o / 5e3);
 
     fragColor = vec4(o.rgb, 1.0);
@@ -76,7 +83,7 @@ function safeLink(gl: WebGL2RenderingContext, vs: WebGLShader, fs: WebGLShader) 
 function drawError(gl: WebGL2RenderingContext, msg: string) {
   console.error(msg);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.clearColor(0.2, 0.0, 0.0, 1);
+  gl.clearColor(0.0, 0.0, 0.0, 1);
   gl.clear(gl.COLOR_BUFFER_BIT);
 }
 
@@ -85,6 +92,8 @@ export function ShaderCanvas({
   fragSource = SHADER_SRC,
   pixelRatio,
   speedMultiplier = 1.0,
+  amplitude = 0,
+  voiceStatus = "idle",
   className,
   style,
   onClick,
@@ -92,6 +101,8 @@ export function ShaderCanvas({
   fragSource?: string;
   pixelRatio?: number;
   speedMultiplier?: number;
+  amplitude?: number;
+  voiceStatus?: string;
   className?: string;
   style?: React.CSSProperties;
   onClick?: () => void;
@@ -101,11 +112,23 @@ export function ShaderCanvas({
   const startRef = useRef<number>(0);
   const frameRef = useRef<number>(0);
   const mouseRef = useRef({ x: 0, y: 0, l: 0, r: 0 });
+
   const speedRef = useRef<number>(speedMultiplier);
+  const amplitudeRef = useRef<number>(amplitude);
+  const voiceStatusRef = useRef<string>(voiceStatus);
+  const smoothedAudioRef = useRef<number>(0);
 
   useEffect(() => {
     speedRef.current = speedMultiplier;
   }, [speedMultiplier]);
+
+  useEffect(() => {
+    amplitudeRef.current = amplitude;
+  }, [amplitude]);
+
+  useEffect(() => {
+    voiceStatusRef.current = voiceStatus;
+  }, [voiceStatus]);
 
   useEffect(() => {
     const canvasEl = canvasRef.current;
@@ -115,7 +138,6 @@ export function ShaderCanvas({
     if (!glCtx) return;
     const gl = glCtx;
 
-    // ----- заранее объявляем все ресурсы (никакого TDZ) -----
     let disposed = false;
     let vao: WebGLVertexArrayObject | null = null;
     let vbo: WebGLBuffer | null = null;
@@ -123,7 +145,6 @@ export function ShaderCanvas({
     let ro: ResizeObserver | null = null;
     let resizeScheduled = false;
 
-    // флаги для корректного removeEventListener
     let mouseBound = false;
     let touchBound = false;
     let ctxBound = false;
@@ -184,7 +205,7 @@ export function ShaderCanvas({
       requestAnimationFrame(applySize);
     }
 
-    // ----- геометрия -----
+    // Geometry
     vao = gl.createVertexArray();
     vbo = gl.createBuffer();
     if (!vao || !vbo) { drawError(gl, "Failed to create VAO/VBO"); return cleanup; }
@@ -194,7 +215,7 @@ export function ShaderCanvas({
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-    // ----- шейдеры -----
+    // Shaders
     const { shader: vs, log: vsLog } = safeCompile(gl, gl.VERTEX_SHADER, VERT_SRC);
     if (!vs) { drawError(gl, `Vertex compile error:\n${vsLog}`); return cleanup; }
     const { shader: fs, log: fsLog } = safeCompile(gl, gl.FRAGMENT_SHADER, fragSource);
@@ -204,25 +225,26 @@ export function ShaderCanvas({
     if (!linked.program) { drawError(gl, `Program link error:\n${linked.log}`); return cleanup; }
     program = linked.program;
 
-    // ----- uniforms -----
+    // Uniforms
     const uResolution = gl.getUniformLocation(program, "iResolution");
     const uTime = gl.getUniformLocation(program, "iTime");
     const uFrame = gl.getUniformLocation(program, "iFrame");
     const uMouse = gl.getUniformLocation(program, "iMouse");
+    const uAudio = gl.getUniformLocation(program, "iAudio");
 
-    // ----- ресайз -----
+    // ResizeObserver
     ro = new ResizeObserver(scheduleSize);
     ro.observe(canvas);
     scheduleSize();
 
-    // ----- события мыши -----
+    // Mouse Listeners
     canvas.addEventListener("mousemove", onMove);
     canvas.addEventListener("mousedown", onDown);
     canvas.addEventListener("mouseup", onUp);
     canvas.addEventListener("contextmenu", onCtxMenu);
     mouseBound = true;
 
-    // ----- события тач (для мобильных PWA) -----
+    // Touch Listeners
     canvas.addEventListener("touchstart", onTouchStart, { passive: true });
     canvas.addEventListener("touchmove", onTouchMove, { passive: true });
     canvas.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -232,7 +254,7 @@ export function ShaderCanvas({
     canvas.addEventListener("webglcontextrestored", onContextRestored);
     ctxBound = true;
 
-    // ----- анимация -----
+    // Animation Loop
     startRef.current = performance.now();
     frameRef.current = 0;
     let accumulatedTime = 0;
@@ -244,6 +266,23 @@ export function ShaderCanvas({
 
       const delta = (now - lastTimestamp) / 1000;
       lastTimestamp = now;
+
+      // Audio smoothing
+      let targetAmp = amplitudeRef.current || 0;
+      if (voiceStatusRef.current === "thinking") {
+        targetAmp = Math.max(targetAmp, 0.28 + Math.sin(now * 0.008) * 0.15);
+      } else if (voiceStatusRef.current === "playing") {
+        targetAmp = Math.max(targetAmp * 1.3, 0.2);
+      } else if (voiceStatusRef.current === "recording") {
+        targetAmp = Math.max(targetAmp * 1.5, 0.06);
+      }
+
+      if (targetAmp > smoothedAudioRef.current) {
+        smoothedAudioRef.current += (targetAmp - smoothedAudioRef.current) * 0.45; // Fast attack
+      } else {
+        smoothedAudioRef.current += (targetAmp - smoothedAudioRef.current) * 0.08; // Smooth decay
+      }
+
       accumulatedTime += delta * speedRef.current;
       frameRef.current += 1;
 
@@ -258,6 +297,7 @@ export function ShaderCanvas({
         if (uResolution) gl.uniform3f(uResolution, w, h, dpr);
         if (uTime) gl.uniform1f(uTime, accumulatedTime);
         if (uFrame) gl.uniform1i(uFrame, frameRef.current);
+        if (uAudio) gl.uniform1f(uAudio, smoothedAudioRef.current);
         if (uMouse) {
           const m = mouseRef.current;
           gl.uniform4f(uMouse, m.x * dpr, m.y * dpr, m.l, m.r);
@@ -273,7 +313,7 @@ export function ShaderCanvas({
     }
     rafRef.current = requestAnimationFrame(tick);
 
-    // ----- cleanup -----
+    // Cleanup
     function cleanup() {
       disposed = true;
 
@@ -319,7 +359,7 @@ export function ShaderCanvas({
     <div
       onClick={onClick}
       className={className}
-      style={{ position: "absolute", inset: 0, ...style }}
+      style={{ position: "relative", width: "100%", height: "100%", ...style }}
     >
       <canvas
         ref={canvasRef}
