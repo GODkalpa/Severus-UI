@@ -21,26 +21,26 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     vec3  FC = vec3(fragCoord, t);
     vec4  o  = vec4(0.0);
 
-    // Audio reactivity: expands radius and flares energy on voice activity
+    // Smooth, organic audio reactivity (gentle breathing, no harsh jumping)
     float amp = clamp(iAudio, 0.0, 1.0);
-    float radius = 3.0 + amp * 0.75;
+    float radius = 3.0 + amp * 0.15;
 
     float s = 0.0;
     for (float i = 0.0, z = 0.0, d = 0.0; i++ < 8e1; o += (cos(s + vec4(0.0, 1.0, 8.0, 0.0)) + 1.0) / d)
     {
         vec3 p = z * normalize(FC.rgb * 2.0 - r.xyy);
         vec3 a = normalize(cos(vec3(5.0, 0.0, 1.0) + t - d * 4.0));
-        p.z += 5.0;
+        p.z += 6.5; // Refined smaller sphere size
 
         a = a * dot(a, p) - cross(a, p);
         for (d = 1.0; d++ < 9.0; )
-            a -= sin(a * d + t * (1.0 + amp * 0.4)).zxy / d;
+            a -= sin(a * d + t * (1.0 + amp * 0.15)).zxy / d;
 
         z += d = 0.1 * abs(length(p) - radius) + 0.07 * abs(cos(s = a.y));
     }
     
-    // Flare flame intensity dynamically with voice speech
-    o *= (1.0 + amp * 1.6);
+    // Soft, natural luminescence flare
+    o *= (1.0 + amp * 0.25);
     o = tanh(o / 5e3);
 
     fragColor = vec4(o.rgb, 1.0);
@@ -267,21 +267,19 @@ export function ShaderCanvas({
       const delta = (now - lastTimestamp) / 1000;
       lastTimestamp = now;
 
-      // Audio smoothing
+      // Fluid, organic audio smoothing (low-pass filter without abrupt spikes)
       let targetAmp = amplitudeRef.current || 0;
       if (voiceStatusRef.current === "thinking") {
-        targetAmp = Math.max(targetAmp, 0.28 + Math.sin(now * 0.008) * 0.15);
+        targetAmp = Math.max(targetAmp, 0.2 + Math.sin(now * 0.003) * 0.1);
       } else if (voiceStatusRef.current === "playing") {
-        targetAmp = Math.max(targetAmp * 1.3, 0.2);
+        targetAmp = Math.max(targetAmp * 0.8, 0.15);
       } else if (voiceStatusRef.current === "recording") {
-        targetAmp = Math.max(targetAmp * 1.5, 0.06);
+        targetAmp = Math.max(targetAmp * 0.8, 0.05);
       }
 
-      if (targetAmp > smoothedAudioRef.current) {
-        smoothedAudioRef.current += (targetAmp - smoothedAudioRef.current) * 0.45; // Fast attack
-      } else {
-        smoothedAudioRef.current += (targetAmp - smoothedAudioRef.current) * 0.08; // Smooth decay
-      }
+      // Smooth exponential filter: 0.08 rise, 0.04 fall for silky breathing
+      const filterRate = targetAmp > smoothedAudioRef.current ? 0.08 : 0.04;
+      smoothedAudioRef.current += (targetAmp - smoothedAudioRef.current) * filterRate;
 
       accumulatedTime += delta * speedRef.current;
       frameRef.current += 1;

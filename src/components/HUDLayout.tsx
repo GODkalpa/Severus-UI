@@ -140,8 +140,8 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
   return (
     <div className="relative w-full h-screen h-[100dvh] overflow-hidden flex flex-col justify-between bg-black select-none">
       
-      {/* 1. Header Bar: Borderless Minimalist & Clean */}
-      <header className="shrink-0 z-20 flex items-center justify-between px-5 py-4 border-b border-white/[0.04] bg-black/40 backdrop-blur-xl">
+      {/* 1. Header Bar: Transparent Minimalist Floating Header */}
+      <header className="shrink-0 z-20 flex items-center justify-between px-6 py-5 bg-transparent border-none">
         {/* Left: Identity, Model & Visualizer Switcher */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
@@ -220,11 +220,11 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
             voiceStatus={status}
             speedMultiplier={
               status === "thinking"
-                ? 2.2
+                ? 1.4
                 : status === "playing"
-                ? 1.5
+                ? 1.15
                 : status === "recording"
-                ? 1.2
+                ? 1.05
                 : 0.8
             }
             className="w-full h-full"
