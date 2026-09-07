@@ -408,6 +408,10 @@ export function useVoiceAssistant(sessionToken: string = "", onAuthError?: () =>
         } else if (event.data === "EOS") {
           console.log("Received EOS signal from backend");
           serverFinishedRef.current = true;
+          // If assistant was thinking and no audio stream played, return to listening/recording
+          if (statusRef.current === "thinking") {
+            updateStatus("recording");
+          }
         }
       }
     };
