@@ -80,6 +80,18 @@ export function useVoiceAssistant(sessionToken: string = "", onAuthError?: () =>
         }
         const rms = Math.sqrt(sumSquares / dataArray.length);
         setAmplitude(Math.min(1, rms * 5));
+
+        // Watchdog: If status is playing but audio has finished playing past scheduled end
+        if (
+          audioContextRef.current &&
+          nextPlaybackTimeRef.current > 0 &&
+          audioContextRef.current.currentTime > nextPlaybackTimeRef.current + 0.6
+        ) {
+          console.warn("Watchdog: Playback idle timeout -> restoring recording state.");
+          updateStatus("recording");
+          serverFinishedRef.current = false;
+          nextPlaybackTimeRef.current = 0;
+        }
       } else {
         setAmplitude(0);
       }
@@ -163,6 +175,35 @@ export function useVoiceAssistant(sessionToken: string = "", onAuthError?: () =>
     }
   };
 
+  const checkAndRestoreRecordingState = () => {
+    const audioContext = audioContextRef.current;
+    if (!audioContext) {
+      if (statusRef.current !== "recording") updateStatus("recording");
+      serverFinishedRef.current = false;
+      return;
+    }
+
+    const remainingTime = nextPlaybackTimeRef.current - audioContext.currentTime;
+    if (serverFinishedRef.current) {
+      if (remainingTime <= 0.05) {
+        console.log("Audio playback finished & EOS confirmed -> returning to recording mode.");
+        updateStatus("recording");
+        serverFinishedRef.current = false;
+        nextPlaybackTimeRef.current = 0;
+      } else {
+        // Schedule exact transition for when queued audio finishes
+        window.setTimeout(() => {
+          if (serverFinishedRef.current && statusRef.current === "playing") {
+            console.log("Scheduled playback completed -> returning to recording mode.");
+            updateStatus("recording");
+            serverFinishedRef.current = false;
+            nextPlaybackTimeRef.current = 0;
+          }
+        }, Math.max(0, remainingTime * 1000 + 50));
+      }
+    }
+  };
+
   const playAudio = async (blob: Blob) => {
     // 1. ArrayBuffer is easier to handle for decoding
     const arrayBuffer = await blob.arrayBuffer();
@@ -223,15 +264,10 @@ export function useVoiceAssistant(sessionToken: string = "", onAuthError?: () =>
       updateStatus("playing");
 
       // Update next end time
-      nextPlaybackTimeRef.current = startTime + audioBuffer.duration;
+      nextPlaybackTimeRef.current = Math.max(nextPlaybackTimeRef.current, startTime + audioBuffer.duration);
 
       source.onended = () => {
-        // If current time is past the end of the scheduled queue, resume recording
-        if (audioContext.currentTime >= nextPlaybackTimeRef.current - 0.1 && serverFinishedRef.current) {
-          console.log("Speech finished, resuming recording mode.");
-          updateStatus("recording");
-          serverFinishedRef.current = false;
-        }
+        checkAndRestoreRecordingState();
       };
 
     } catch (err) {
@@ -379,6 +415,7 @@ export function useVoiceAssistant(sessionToken: string = "", onAuthError?: () =>
       } else if (typeof event.data === "string") {
         if (event.data === "THINKING") {
           console.log("Backend is thinking...");
+          serverFinishedRef.current = false;
           updateStatus("thinking");
         } else if (event.data.startsWith("TRANSCRIPT:")) {
           const text = event.data.replace("TRANSCRIPT:", "");
@@ -408,10 +445,7 @@ export function useVoiceAssistant(sessionToken: string = "", onAuthError?: () =>
         } else if (event.data === "EOS") {
           console.log("Received EOS signal from backend");
           serverFinishedRef.current = true;
-          // If assistant was thinking and no audio stream played, return to listening/recording
-          if (statusRef.current === "thinking") {
-            updateStatus("recording");
-          }
+          checkAndRestoreRecordingState();
         }
       }
     };

@@ -7,6 +7,7 @@ type DashboardResponse = {
   biometrics?: DbRow[];
   action_items?: DbRow[];
   financial_ledger?: DbRow[];
+  reminders?: DbRow[];
 };
 
 export interface DashboardBiometric {
@@ -15,6 +16,16 @@ export interface DashboardBiometric {
   value: number;
   unit: string;
   loggedAt: string | null;
+}
+
+export interface DashboardReminder {
+  id: RowId;
+  reminderText: string;
+  isOneOff: boolean;
+  intervalHours: number | null;
+  dueAt: string | null;
+  isActive: boolean;
+  createdAt: string | null;
 }
 
 export interface DashboardActionItem {
@@ -80,9 +91,20 @@ const mapFinancialEntry = (row: DbRow): DashboardFinancialEntry => ({
   loggedAt: asNullableString(row.logged_at),
 });
 
+const mapReminder = (row: DbRow): DashboardReminder => ({
+  id: asId(row.id),
+  reminderText: asString(row.reminder_text),
+  isOneOff: Boolean(row.is_one_off),
+  intervalHours: row.interval_hours != null ? asNumber(row.interval_hours) : null,
+  dueAt: asNullableString(row.due_at),
+  isActive: Boolean(row.is_active ?? true),
+  createdAt: asNullableString(row.created_at),
+});
+
 export function useRealtimeDashboard(sessionToken: string = "", onAuthError?: () => void) {
   const [biometrics, setBiometrics] = useState<DashboardBiometric[]>([]);
   const [actionQueue, setActionQueue] = useState<DashboardActionItem[]>([]);
+  const [reminders, setReminders] = useState<DashboardReminder[]>([]);
   const [financialLedger, setFinancialLedger] = useState<DashboardFinancialEntry[]>([]);
 
   useEffect(() => {
@@ -122,6 +144,7 @@ export function useRealtimeDashboard(sessionToken: string = "", onAuthError?: ()
         setBiometrics((payload.biometrics ?? []).map((row) => mapBiometric(row)));
         setActionQueue((payload.action_items ?? []).map((row) => mapActionItem(row)));
         setFinancialLedger((payload.financial_ledger ?? []).map((row) => mapFinancialEntry(row)));
+        setReminders((payload.reminders ?? []).map((row) => mapReminder(row)));
       } catch (error) {
         if (!isActive) {
           return;
@@ -146,7 +169,7 @@ export function useRealtimeDashboard(sessionToken: string = "", onAuthError?: ()
       }
 
       void fetchData();
-    }, pollInterval);
+    }, 10000);
 
     return () => {
       isActive = false;
@@ -155,5 +178,5 @@ export function useRealtimeDashboard(sessionToken: string = "", onAuthError?: ()
     };
   }, [sessionToken]);
 
-  return { biometrics, actionQueue, financialLedger };
+  return { biometrics, actionQueue, reminders, financialLedger };
 }

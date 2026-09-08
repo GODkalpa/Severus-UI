@@ -54,7 +54,7 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
     partialTranscript,
   } = useVoiceAssistant(sessionToken, onAuthError);
 
-  const { actionQueue, financialLedger } = useRealtimeDashboard(sessionToken, onAuthError);
+  const { actionQueue, reminders, financialLedger } = useRealtimeDashboard(sessionToken, onAuthError);
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [activeDrawer, setActiveDrawer] = useState<"agenda" | "finances" | null>(null);
   const [visualizerMode, setVisualizerMode] = useState<"phosphor" | "sphere">("phosphor");
@@ -350,7 +350,7 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
               {/* Drawer Content */}
               <div className="flex-grow pt-4 overflow-hidden">
                 {activeDrawer === "agenda" ? (
-                  <ActionQueue data={actionQueue} />
+                  <ActionQueue data={actionQueue} reminders={reminders} />
                 ) : (
                   <FinancialLedger data={financialLedger} />
                 )}
@@ -391,7 +391,7 @@ export default function HUDLayout({ sessionToken, onAuthError }: HUDLayoutProps)
               {/* Mobile Drawer Content */}
               <div className="flex-grow pt-4 overflow-y-auto max-h-[60vh]">
                 {activeDrawer === "agenda" ? (
-                  <ActionQueue data={actionQueue} />
+                  <ActionQueue data={actionQueue} reminders={reminders} />
                 ) : (
                   <FinancialLedger data={financialLedger} />
                 )}

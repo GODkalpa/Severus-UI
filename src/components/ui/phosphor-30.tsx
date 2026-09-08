@@ -18,7 +18,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
     vec2  r  = iResolution.xy;
     float t  = iTime;
-    vec3  FC = vec3(fragCoord, t);
+    vec3  FC = vec3(fragCoord, 0.0);
     vec4  o  = vec4(0.0);
 
     // Smooth, organic audio reactivity (gentle breathing, no harsh jumping)
@@ -27,7 +27,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 
     float s = 0.0;
     // Mobile-optimized step count (55 steps vs 80) retains full volumetric detail while saving 32% GPU load
-    for (float i = 0.0, z = 0.0, d = 0.0; i++ < 5.5e1; o += (cos(s + vec4(0.0, 1.0, 8.0, 0.0)) + 1.0) / d)
+    for (float i = 0.0, z = 0.0, d = 0.0; i++ < 5.5e1; o += (cos(s + vec4(0.0, 1.0, 8.0, 0.0)) + 1.0) / max(d, 0.002))
     {
         vec3 p = z * normalize(FC.rgb * 2.0 - r.xyy);
         vec3 a = normalize(cos(vec3(5.0, 0.0, 1.0) + t - d * 4.0));
@@ -43,7 +43,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     
     // Soft, natural luminescence flare
     o *= (1.0 + amp * 0.25);
-    o = tanh(o / 4.2e3);
+    o = tanh(clamp(o / 4.2e3, -20.0, 20.0));
 
     fragColor = vec4(o.rgb, 1.0);
 }
@@ -187,9 +187,6 @@ export function ShaderCanvas({
     };
     const onTouchEnd = () => { mouseRef.current.l = 0; };
 
-    const onContextLost = (ev: Event) => { ev.preventDefault(); if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = null; };
-    const onContextRestored = () => { scheduleSize(); startRef.current = performance.now(); frameRef.current = 0; if (!rafRef.current) rafRef.current = requestAnimationFrame(tick); };
-
     const getDpr = () => {
       if (pixelRatio) return pixelRatio;
       const sys = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
@@ -226,32 +223,64 @@ export function ShaderCanvas({
       requestAnimationFrame(applySize);
     }
 
-    // Geometry
-    vao = gl.createVertexArray();
-    vbo = gl.createBuffer();
-    if (!vao || !vbo) { drawError(gl, "Failed to create VAO/VBO"); return cleanup; }
-    gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    let uResolution: WebGLUniformLocation | null = null;
+    let uTime: WebGLUniformLocation | null = null;
+    let uFrame: WebGLUniformLocation | null = null;
+    let uMouse: WebGLUniformLocation | null = null;
+    let uAudio: WebGLUniformLocation | null = null;
 
-    // Shaders
-    const { shader: vs, log: vsLog } = safeCompile(gl, gl.VERTEX_SHADER, VERT_SRC);
-    if (!vs) { drawError(gl, `Vertex compile error:\n${vsLog}`); return cleanup; }
-    const { shader: fs, log: fsLog } = safeCompile(gl, gl.FRAGMENT_SHADER, fragSource);
-    if (!fs) { drawError(gl, `Fragment compile error:\n${fsLog}`); gl.deleteShader(vs); return cleanup; }
-    const linked = safeLink(gl, vs, fs);
-    gl.deleteShader(vs); gl.deleteShader(fs);
-    if (!linked.program) { drawError(gl, `Program link error:\n${linked.log}`); return cleanup; }
-    program = linked.program;
+    function initGL() {
+      if (disposed || !gl) return false;
 
-    // Uniforms
-    const uResolution = gl.getUniformLocation(program, "iResolution");
-    const uTime = gl.getUniformLocation(program, "iTime");
-    const uFrame = gl.getUniformLocation(program, "iFrame");
-    const uMouse = gl.getUniformLocation(program, "iMouse");
-    const uAudio = gl.getUniformLocation(program, "iAudio");
+      // Clean up previous WebGL handles if any
+      if (vbo) { try { gl.deleteBuffer(vbo); } catch {} vbo = null; }
+      if (vao) { try { gl.deleteVertexArray(vao); } catch {} vao = null; }
+      if (program) { try { gl.deleteProgram(program); } catch {} program = null; }
+
+      // Geometry
+      vao = gl.createVertexArray();
+      vbo = gl.createBuffer();
+      if (!vao || !vbo) { drawError(gl, "Failed to create VAO/VBO"); return false; }
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+      // Shaders
+      const { shader: vs, log: vsLog } = safeCompile(gl, gl.VERTEX_SHADER, VERT_SRC);
+      if (!vs) { drawError(gl, `Vertex compile error:\n${vsLog}`); return false; }
+      const { shader: fs, log: fsLog } = safeCompile(gl, gl.FRAGMENT_SHADER, fragSource);
+      if (!fs) { drawError(gl, `Fragment compile error:\n${fsLog}`); gl.deleteShader(vs); return false; }
+      const linked = safeLink(gl, vs, fs);
+      gl.deleteShader(vs); gl.deleteShader(fs);
+      if (!linked.program) { drawError(gl, `Program link error:\n${linked.log}`); return false; }
+      program = linked.program;
+
+      // Uniforms
+      uResolution = gl.getUniformLocation(program, "iResolution");
+      uTime = gl.getUniformLocation(program, "iTime");
+      uFrame = gl.getUniformLocation(program, "iFrame");
+      uMouse = gl.getUniformLocation(program, "iMouse");
+      uAudio = gl.getUniformLocation(program, "iAudio");
+
+      return true;
+    }
+
+    if (!initGL()) return cleanup;
+
+    const onContextLost = (ev: Event) => {
+      ev.preventDefault();
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+    const onContextRestored = () => {
+      initGL();
+      scheduleSize();
+      lastTimestamp = performance.now();
+      frameRef.current = 0;
+      if (!rafRef.current) rafRef.current = requestAnimationFrame(tick);
+    };
 
     // ResizeObserver
     ro = new ResizeObserver(scheduleSize);
@@ -303,7 +332,7 @@ export function ShaderCanvas({
       const filterRate = targetAmp > smoothedAudioRef.current ? 0.08 : 0.04;
       smoothedAudioRef.current += (targetAmp - smoothedAudioRef.current) * filterRate;
 
-      accumulatedTime += delta * speedRef.current;
+      accumulatedTime = (accumulatedTime + delta * speedRef.current) % 10000.0;
       frameRef.current += 1;
 
       try {

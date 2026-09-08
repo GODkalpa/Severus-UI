@@ -212,8 +212,8 @@ void main() {
     colRim = recRim;
   }
 
-  // Fast Bounding Sphere Check to avoid unnecessary raymarch on background pixels
-  float bRadius = 1.05;
+  // Bounding Sphere Check to avoid unnecessary raymarch on background pixels
+  float bRadius = 1.6;
   float bDist = dot(ro, rd);
   float cDist = dot(ro, ro) - bDist * bDist;
   
@@ -317,6 +317,16 @@ export default function InteractiveSphere({
 
   const [webglFailed, setWebglFailed] = useState(false);
 
+  const voiceStatusRef = useRef(voiceStatus);
+  const amplitudeRef = useRef(amplitude);
+  const analyserRefLocal = useRef(analyserRef);
+  const playbackAnalyserRefLocal = useRef(playbackAnalyserRef);
+
+  useEffect(() => { voiceStatusRef.current = voiceStatus; }, [voiceStatus]);
+  useEffect(() => { amplitudeRef.current = amplitude; }, [amplitude]);
+  useEffect(() => { analyserRefLocal.current = analyserRef; }, [analyserRef]);
+  useEffect(() => { playbackAnalyserRefLocal.current = playbackAnalyserRef; }, [playbackAnalyserRef]);
+
   // Map VoiceAssistantStatus to float index
   const getStateNumber = useCallback((status: VoiceAssistantStatus): number => {
     switch (status) {
@@ -341,6 +351,12 @@ export default function InteractiveSphere({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    let program: WebGLProgram | null = null;
+    let vert: WebGLShader | null = null;
+    let frag: WebGLShader | null = null;
+    let vao: WebGLVertexArrayObject | null = null;
+    let vbo: WebGLBuffer | null = null;
 
     const gl = canvas.getContext("webgl2", {
       alpha: true,
@@ -370,65 +386,77 @@ export default function InteractiveSphere({
       return shader;
     };
 
-    const vert = createShader(gl.VERTEX_SHADER, VERTEX_SHADER);
-    const frag = createShader(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+    const setupGL = () => {
+      if (vbo) { try { gl.deleteBuffer(vbo); } catch {} vbo = null; }
+      if (vao) { try { gl.deleteVertexArray(vao); } catch {} vao = null; }
+      if (program) { try { gl.deleteProgram(program); } catch {} program = null; }
+      if (vert) { try { gl.deleteShader(vert); } catch {} vert = null; }
+      if (frag) { try { gl.deleteShader(frag); } catch {} frag = null; }
 
-    if (!vert || !frag) {
-      setWebglFailed(true);
-      return;
-    }
+      vert = createShader(gl.VERTEX_SHADER, VERTEX_SHADER);
+      frag = createShader(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
 
-    const program = gl.createProgram();
-    if (!program) return;
-    gl.attachShader(program, vert);
-    gl.attachShader(program, frag);
-    gl.linkProgram(program);
+      if (!vert || !frag) {
+        setWebglFailed(true);
+        return false;
+      }
 
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.error("Program link error:", gl.getProgramInfoLog(program));
-      setWebglFailed(true);
-      return;
-    }
+      program = gl.createProgram();
+      if (!program) return false;
+      gl.attachShader(program, vert);
+      gl.attachShader(program, frag);
+      gl.linkProgram(program);
 
-    gl.useProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.error("Program link error:", gl.getProgramInfoLog(program));
+        setWebglFailed(true);
+        return false;
+      }
 
-    // Quad Buffer
-    const quad = new Float32Array([
-      -1, -1,
-       1, -1,
-      -1,  1,
-      -1,  1,
-       1, -1,
-       1,  1,
-    ]);
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
+      gl.useProgram(program);
 
-    const vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+      // Quad Buffer
+      const quad = new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+        -1,  1,
+         1, -1,
+         1,  1,
+      ]);
+      vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
 
-    const posAttr = gl.getAttribLocation(program, "position");
-    gl.enableVertexAttribArray(posAttr);
-    gl.vertexAttribPointer(posAttr, 2, gl.FLOAT, false, 0, 0);
+      vbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
 
-    // Cache Uniform Locations
-    uniformsRef.current = {
-      u_resolution: gl.getUniformLocation(program, "u_resolution"),
-      u_time: gl.getUniformLocation(program, "u_time"),
-      u_amplitude: gl.getUniformLocation(program, "u_amplitude"),
-      u_state: gl.getUniformLocation(program, "u_state"),
-      u_pointer: gl.getUniformLocation(program, "u_pointer"),
-      u_rotation: gl.getUniformLocation(program, "u_rotation"),
+      const posAttr = gl.getAttribLocation(program, "position");
+      gl.enableVertexAttribArray(posAttr);
+      gl.vertexAttribPointer(posAttr, 2, gl.FLOAT, false, 0, 0);
+
+      // Cache Uniform Locations
+      uniformsRef.current = {
+        u_resolution: gl.getUniformLocation(program, "u_resolution"),
+        u_time: gl.getUniformLocation(program, "u_time"),
+        u_amplitude: gl.getUniformLocation(program, "u_amplitude"),
+        u_state: gl.getUniformLocation(program, "u_state"),
+        u_pointer: gl.getUniformLocation(program, "u_pointer"),
+        u_rotation: gl.getUniformLocation(program, "u_rotation"),
+      };
+
+      return true;
     };
+
+    if (!setupGL()) return;
 
     // Render Loop
     const render = () => {
       if (!gl || !canvas) return;
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const displayWidth = Math.floor(canvas.clientWidth * dpr);
-      const displayHeight = Math.floor(canvas.clientHeight * dpr);
+      const displayWidth = Math.max(1, Math.floor((canvas.clientWidth || 300) * dpr));
+      const displayHeight = Math.max(1, Math.floor((canvas.clientHeight || 300) * dpr));
 
       if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
         canvas.width = displayWidth;
@@ -437,7 +465,7 @@ export default function InteractiveSphere({
       }
 
       // Elapsed time in seconds
-      const elapsed = (Date.now() - startTimeRef.current) * 0.001;
+      const elapsed = ((Date.now() - startTimeRef.current) * 0.001) % 10000;
 
       // Pointer easing
       pointerPosRef.current.x += (pointerPosRef.current.targetX - pointerPosRef.current.x) * 0.1;
@@ -452,10 +480,11 @@ export default function InteractiveSphere({
       }
 
       // Audio Amplitude Sampling
-      let realAmp = amplitude;
+      const currentStatus = voiceStatusRef.current;
+      let realAmp = amplitudeRef.current;
       const activeAnalyser =
-        voiceStatus === "playing" ? playbackAnalyserRef?.current : analyserRef?.current;
-      if (activeAnalyser && (voiceStatus === "recording" || voiceStatus === "playing")) {
+        currentStatus === "playing" ? playbackAnalyserRefLocal.current?.current : analyserRefLocal.current?.current;
+      if (activeAnalyser && (currentStatus === "recording" || currentStatus === "playing")) {
         const freqData = new Uint8Array(activeAnalyser.frequencyBinCount);
         activeAnalyser.getByteFrequencyData(freqData);
         let sum = 0;
@@ -478,7 +507,7 @@ export default function InteractiveSphere({
       if (u.u_resolution) gl.uniform2f(u.u_resolution, canvas.width, canvas.height);
       if (u.u_time) gl.uniform1f(u.u_time, elapsed);
       if (u.u_amplitude) gl.uniform1f(u.u_amplitude, smoothedAmpRef.current);
-      if (u.u_state) gl.uniform1f(u.u_state, getStateNumber(voiceStatus));
+      if (u.u_state) gl.uniform1f(u.u_state, getStateNumber(currentStatus));
       if (u.u_pointer) gl.uniform2f(u.u_pointer, pointerPosRef.current.x, pointerPosRef.current.y);
       if (u.u_rotation) gl.uniform2f(u.u_rotation, rotationRef.current.rotY, rotationRef.current.rotX);
 
@@ -491,13 +520,31 @@ export default function InteractiveSphere({
 
     animFrameIdRef.current = requestAnimationFrame(render);
 
+    const handleContextLost = (e: Event) => {
+      e.preventDefault();
+      if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
+    };
+
+    const handleContextRestored = () => {
+      if (setupGL()) {
+        animFrameIdRef.current = requestAnimationFrame(render);
+      }
+    };
+
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+    canvas.addEventListener("webglcontextrestored", handleContextRestored);
+
     return () => {
       cancelAnimationFrame(animFrameIdRef.current);
-      gl.deleteProgram(program);
-      gl.deleteShader(vert);
-      gl.deleteShader(frag);
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
+      canvas.removeEventListener("webglcontextrestored", handleContextRestored);
+      if (vbo) gl.deleteBuffer(vbo);
+      if (vao) gl.deleteVertexArray(vao);
+      if (program) gl.deleteProgram(program);
+      if (vert) gl.deleteShader(vert);
+      if (frag) gl.deleteShader(frag);
     };
-  }, [voiceStatus, amplitude, analyserRef, playbackAnalyserRef, getStateNumber]);
+  }, [getStateNumber]);
 
   // Pointer & Drag Handlers
   const handlePointerDown = (e: React.PointerEvent) => {
